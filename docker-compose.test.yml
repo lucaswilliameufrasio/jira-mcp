@@ -1,0 +1,10 @@
+services:
+  valkey:
+    image: valkey/valkey:9.1
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "PING"]
+      interval: 1s
+      timeout: 2s
+      retries: 30

@@ -76,11 +76,13 @@ func runRemote() error {
 		return err
 	}
 	server, err := remote.New(remote.Config{
-		PublicURL:     strings.TrimSpace(os.Getenv("JIRA_MCP_PUBLIC_URL")),
-		AtlassianID:   strings.TrimSpace(os.Getenv("JIRA_MCP_ATLASSIAN_CLIENT_ID")),
-		AtlassianKey:  strings.TrimSpace(os.Getenv("JIRA_MCP_ATLASSIAN_CLIENT_SECRET")),
-		Store:         store,
-		EncryptionKey: key,
+		PublicURL:        strings.TrimSpace(os.Getenv("JIRA_MCP_PUBLIC_URL")),
+		AtlassianID:      strings.TrimSpace(os.Getenv("JIRA_MCP_ATLASSIAN_CLIENT_ID")),
+		AtlassianKey:     strings.TrimSpace(os.Getenv("JIRA_MCP_ATLASSIAN_CLIENT_SECRET")),
+		AtlassianAuthURL: strings.TrimSpace(os.Getenv("JIRA_MCP_ATLASSIAN_AUTH_URL")),
+		AtlassianAPIURL:  strings.TrimSpace(os.Getenv("JIRA_MCP_ATLASSIAN_API_URL")),
+		Store:            store,
+		EncryptionKey:    key,
 	})
 	if err != nil {
 		return err

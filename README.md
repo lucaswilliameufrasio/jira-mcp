@@ -61,6 +61,22 @@ go build -o jira-mcp .
 
 Isso gera um binário único `jira-mcp` (ou `jira-mcp.exe` no Windows).
 
+## Testes
+
+As suítes são independentes do host MCP (OpenCode, Claude ou outro): elas falam
+diretamente o protocolo MCP.
+
+```bash
+make test-unit          # testes unitários
+make test-integration   # fake OAuth/MCP + Valkey 9.1.x real via Docker
+make test-e2e            # binário real via stdio
+make test                # todas as camadas
+```
+
+O E2E stdio usa `JIRA_MCP_BINARY` quando executado diretamente. O teste de
+integração OAuth usa endpoints Atlassian configuráveis para executar contra
+fakes determinísticos, sem exigir credenciais reais.
+
 ## Configuração
 
 O servidor lê tudo de variáveis de ambiente:

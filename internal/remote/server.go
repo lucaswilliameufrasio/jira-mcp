@@ -30,11 +30,13 @@ const (
 )
 
 type Config struct {
-	PublicURL     string
-	AtlassianID   string
-	AtlassianKey  string
-	Store         Store
-	EncryptionKey []byte
+	PublicURL        string
+	AtlassianID      string
+	AtlassianKey     string
+	AtlassianAuthURL string
+	AtlassianAPIURL  string
+	Store            Store
+	EncryptionKey    []byte
 }
 
 type Server struct {
@@ -87,6 +89,12 @@ type accessSession struct {
 }
 
 func New(cfg Config) (*Server, error) {
+	if cfg.AtlassianAuthURL == "" {
+		cfg.AtlassianAuthURL = "https://auth.atlassian.com"
+	}
+	if cfg.AtlassianAPIURL == "" {
+		cfg.AtlassianAPIURL = "https://api.atlassian.com"
+	}
 	if cfg.PublicURL == "" || cfg.AtlassianID == "" || cfg.AtlassianKey == "" || cfg.Store == nil || len(cfg.EncryptionKey) != 32 {
 		return nil, errors.New("remote server requires public URL, Atlassian OAuth credentials, store and a 32-byte encryption key")
 	}
@@ -173,7 +181,7 @@ func (s *Server) userFromRequest(r *http.Request) (userRecord, bool) {
 
 func (s *Server) refreshUser(ctx context.Context, userID string, user userRecord) (userRecord, error) {
 	form := url.Values{"grant_type": {"refresh_token"}, "client_id": {s.cfg.AtlassianID}, "client_secret": {s.cfg.AtlassianKey}, "refresh_token": {user.RefreshToken}}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://auth.atlassian.com/oauth/token", strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(s.cfg.AtlassianAuthURL, "/")+"/oauth/token", strings.NewReader(form.Encode()))
 	if err != nil {
 		return userRecord{}, err
 	}
@@ -265,7 +273,7 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	params := url.Values{"audience": {"api.atlassian.com"}, "client_id": {s.cfg.AtlassianID}, "scope": {"read:jira-work write:jira-work read:jira-user offline_access"}, "redirect_uri": {strings.TrimRight(s.cfg.PublicURL, "/") + "/oauth/callback"}, "state": {externalState}, "response_type": {"code"}, "prompt": {"consent"}}
-	http.Redirect(w, r, "https://auth.atlassian.com/authorize?"+params.Encode(), http.StatusFound)
+	http.Redirect(w, r, strings.TrimRight(s.cfg.AtlassianAuthURL, "/")+"/authorize?"+params.Encode(), http.StatusFound)
 }
 
 func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
@@ -371,7 +379,7 @@ type atlassianToken struct {
 
 func (s *Server) exchangeAtlassian(ctx context.Context, code, state string) (atlassianToken, []resource, string, error) {
 	form := url.Values{"grant_type": {"authorization_code"}, "client_id": {s.cfg.AtlassianID}, "client_secret": {s.cfg.AtlassianKey}, "code": {code}, "redirect_uri": {strings.TrimRight(s.cfg.PublicURL, "/") + "/oauth/callback"}}
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://auth.atlassian.com/oauth/token", strings.NewReader(form.Encode()))
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(s.cfg.AtlassianAuthURL, "/")+"/oauth/token", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -386,24 +394,24 @@ func (s *Server) exchangeAtlassian(ctx context.Context, code, state string) (atl
 	if err := json.NewDecoder(res.Body).Decode(&token); err != nil {
 		return token, nil, "", err
 	}
-	resources, err := getResources(ctx, token.AccessToken)
+	resources, err := s.getResources(ctx, token.AccessToken)
 	if err != nil {
 		return token, nil, "", err
 	}
-	accountID, err := getAccountID(ctx, token.AccessToken)
+	accountID, err := s.getAccountID(ctx, token.AccessToken)
 	return token, resources, accountID, err
 }
 
-func getResources(ctx context.Context, accessToken string) ([]resource, error) {
-	return getJSON[[]resource](ctx, "https://api.atlassian.com/oauth/token/accessible-resources", accessToken)
+func (s *Server) getResources(ctx context.Context, accessToken string) ([]resource, error) {
+	return getJSON[[]resource](ctx, strings.TrimRight(s.cfg.AtlassianAPIURL, "/")+"/oauth/token/accessible-resources", accessToken)
 }
-func getAccountID(ctx context.Context, accessToken string) (string, error) {
+func (s *Server) getAccountID(ctx context.Context, accessToken string) (string, error) {
 	var v struct {
 		AccountID string `json:"account_id"`
 	}
 	v, err := getJSON[struct {
 		AccountID string `json:"account_id"`
-	}](ctx, "https://api.atlassian.com/me", accessToken)
+	}](ctx, strings.TrimRight(s.cfg.AtlassianAPIURL, "/")+"/me", accessToken)
 	return v.AccountID, err
 }
 func getJSON[T any](ctx context.Context, endpoint, accessToken string) (T, error) {
