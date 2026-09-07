@@ -112,7 +112,7 @@ func New(cfg Config) (*Server, error) {
 			return nil
 		}
 		client := jira.NewClient(jira.Config{
-			BaseURL:     "https://api.atlassian.com/ex/jira/" + user.CloudID,
+			BaseURL:     strings.TrimRight(cfg.AtlassianAPIURL, "/") + "/ex/jira/" + user.CloudID,
 			Deployment:  jira.DeploymentCloud,
 			BearerToken: user.AccessToken,
 		})

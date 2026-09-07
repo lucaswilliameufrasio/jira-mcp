@@ -8,9 +8,23 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+type bearerTransport struct {
+	token string
+	base  http.RoundTripper
+}
+
+func (t bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	clone.Header.Set("Authorization", "Bearer "+t.token)
+	return t.base.RoundTrip(clone)
+}
 
 type memoryStore struct {
 	mu     sync.Mutex
@@ -119,5 +133,57 @@ func TestOAuthTokenRequiresPKCE(t *testing.T) {
 	server.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("token status = %d", rec.Code)
+	}
+}
+
+func TestMCPCallsJiraThroughConfiguredAPIURL(t *testing.T) {
+	var hits int64
+	jiraHits := &hits
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/rest/api/3/search/jql") {
+			atomic.AddInt64(jiraHits, 1)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"issues": []map[string]any{{"id": "10001", "key": "TEST-1"}}})
+			return
+		}
+		http.Error(w, "unexpected", http.StatusNotFound)
+	}))
+	defer fake.Close()
+
+	key := make([]byte, 32)
+	store := &memoryStore{values: make(map[string][]byte)}
+	accessToken, err := seal(key, "atlassian-access-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put(context.Background(), "mcp:user:user-1", userRecord{AccountID: "account-1", CloudID: "cloud-1", Tools: []string{"jira_search"}, AccessToken: accessToken, ExpiresAt: time.Now().Add(time.Hour)}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put(context.Background(), "mcp:token:mcp-token", accessSession{UserID: "user-1"}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(Config{PublicURL: "https://mcp.example", AtlassianID: "client", AtlassianKey: "secret", AtlassianAPIURL: fake.URL, Store: store, EncryptionKey: key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	client := sdk.NewClient(&sdk.Implementation{Name: "unit-client", Version: "1.0.0"}, nil)
+	transport := &sdk.StreamableClientTransport{Endpoint: ts.URL + "/mcp", HTTPClient: &http.Client{Transport: bearerTransport{token: "mcp-token", base: http.DefaultTransport}}, DisableStandaloneSSE: true}
+	session, err := client.Connect(context.Background(), transport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = session.Close() }()
+	result, err := session.CallTool(context.Background(), &sdk.CallToolParams{Name: "jira_search", Arguments: map[string]any{"jql": "project = TEST"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("tool result is error: %v", result.Content)
+	}
+	if atomic.LoadInt64(jiraHits) == 0 {
+		t.Fatal("jira_search did not reach the configured Atlassian API URL")
 	}
 }

@@ -12,17 +12,6 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-type bearerTransport struct {
-	token string
-	base  http.RoundTripper
-}
-
-func (t bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	clone := req.Clone(req.Context())
-	clone.Header.Set("Authorization", "Bearer "+t.token)
-	return t.base.RoundTrip(clone)
-}
-
 func TestRemoteMCPListsToolsForAuthenticatedUser(t *testing.T) {
 	store := &memoryStore{values: make(map[string][]byte)}
 	key := make([]byte, 32)
