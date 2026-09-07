@@ -67,14 +67,13 @@ jobs:
         working-directory: docs-site
     steps:
       - uses: actions/checkout@v4
+      # pnpm 11 requires Node >= 22.13, so Node must be set up first.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - uses: pnpm/action-setup@v4
         with:
           version: 11.5.3
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22.12.0
-          cache: pnpm
-          cache-dependency-path: docs-site/pnpm-lock.yaml
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Build static site

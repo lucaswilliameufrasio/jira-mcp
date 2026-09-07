@@ -14,7 +14,7 @@ Create a Pages project connected to the GitHub repository with these settings:
 | Framework preset | Astro, or custom |
 | Build command | `pnpm build` |
 | Build output directory | `dist` |
-| Node.js version | `22.12.0` or newer |
+| Node.js version | `22.13.0` or newer (pnpm 11 requires it) |
 | Package manager | pnpm |
 
 Because the root directory is `docs-site`, the output directory is relative to
