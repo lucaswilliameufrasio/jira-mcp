@@ -2,6 +2,8 @@ module jira-mcp
 
 go 1.25.0
 
+toolchain go1.27.1
+
 require (
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/valkey-io/valkey-go v1.0.77
