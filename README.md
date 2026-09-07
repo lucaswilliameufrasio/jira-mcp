@@ -5,6 +5,9 @@ Expõe operações comuns do
 Jira como *tools* que qualquer cliente MCP (Claude Desktop, Claude Code, etc.)
 pode chamar.
 
+[![Test](https://github.com/lucaswilliameufrasio/jira-mcp/actions/workflows/test.yml/badge.svg)](https://github.com/lucaswilliameufrasio/jira-mcp/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Landing page e documentação: [docs-site](docs-site/README.md).
 
 ## Ferramentas (tools) disponíveis
@@ -52,6 +55,9 @@ quanto **Jira Server/Data Center** (API v2, texto simples, autenticação via
 Personal Access Token).
 
 ## Build
+
+Alternativamente, baixe um binário pronto (Linux/macOS/Windows, amd64/arm64)
+em [Releases](https://github.com/lucaswilliameufrasio/jira-mcp/releases).
 
 ```bash
 go build -o jira-mcp ./cmd/jira-mcp
@@ -283,16 +289,18 @@ para global):
 
 ```
 jira-mcp/
-├── go.mod
-├── main.go                       # carrega config e inicia o servidor
+├── cmd/jira-mcp/main.go            # entrypoint: modos stdio, remote e setup
 ├── internal/
-│   ├── mcp/
-│   │   ├── types.go               # tipos JSON-RPC / MCP
-│   │   └── server.go              # loop stdio + dispatch
-│   ├── jira/
-│   │   └── client.go              # cliente REST do Jira
-│   └── tools/
-│       └── tools.go                # definição e handlers das tools
+│   ├── config/                     # config via env + assistente interativo
+│   ├── mcp/                        # protocolo MCP mínimo (JSON-RPC por stdio)
+│   ├── jira/                       # cliente REST do Jira (Cloud v3 / DC v2)
+│   ├── remote/                     # servidor HTTP: OAuth Atlassian, Valkey, /mcp
+│   └── tools/                      # definição e handlers das tools MCP
+├── tests/e2e/                      # testes de contrato (stdio, cloud + data center)
+├── docs/                           # guias de deploy e release
+├── docs-site/                      # landing page (Astro)
+├── Dockerfile                      # imagem usada no deploy remoto
+├── Makefile                        # workflow de dev, testes e release
 └── README.md
 ```
 
@@ -314,8 +322,11 @@ Nenhuma outra mudança é necessária — o servidor MCP genérico em
   por link de download, não "vistos" pelo modelo na conversa.
 - **Boards/sprints exigem Jira Software** habilitado no projeto — projetos só
   de "Business"/Service Management não têm boards Agile.
-- Sem testes automatizados nem CI configurados.
 - Não há suporte a Webhooks (push de eventos do Jira) — todas as tools são
   *pull*, chamadas sob demanda pelo modelo.
 - Paginação: `jira_search` (Cloud) usa `page_token`; as tools de board/sprint
   retornam só a primeira página (até `max_results`), sem paginação encadeada.
+
+## Licença
+
+Distribuído sob a [licença MIT](LICENSE).

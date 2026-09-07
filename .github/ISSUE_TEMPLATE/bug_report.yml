@@ -1,0 +1,56 @@
+name: Bug report
+description: Report something that does not work as expected
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear description of the problem, including what you expected instead.
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Deployment mode
+      options:
+        - stdio (local MCP host)
+        - remote (Streamable HTTP + OAuth)
+        - both
+        - other / not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: jira
+    attributes:
+      label: Jira type
+      options:
+        - Jira Cloud
+        - Jira Server / Data Center
+        - both
+        - other / not sure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "`jira-mcp --version`, release tag, or commit hash."
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps, including the tool call or request that failed.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Server stderr or client logs. Redact tokens, emails and URLs with
+        secrets before pasting.
+    validations:
+      required: false
