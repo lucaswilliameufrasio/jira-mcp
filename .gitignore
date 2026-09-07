@@ -11,6 +11,7 @@ config.json
 # Go tooling
 vendor/
 coverage.out
+dist/
 
 # OS/editor files
 .DS_Store

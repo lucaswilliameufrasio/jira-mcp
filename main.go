@@ -29,7 +29,7 @@ import (
 	"jira-mcp/internal/tools"
 )
 
-const version = "1.0.0"
+var version = "dev"
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "setup" {
@@ -92,42 +92,4 @@ func runRemote() error {
 		addr = ":8080"
 	}
 	return http.ListenAndServe(addr, server)
-}
-
-func loadConfig() (jira.Config, error) {
-	baseURL := strings.TrimSpace(os.Getenv("JIRA_BASE_URL"))
-	if baseURL == "" {
-		return jira.Config{}, fmt.Errorf("JIRA_BASE_URL não foi definido")
-	}
-
-	deployment := jira.DeploymentCloud
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("JIRA_DEPLOYMENT"))) {
-	case "", "cloud":
-		deployment = jira.DeploymentCloud
-	case "server", "datacenter", "data-center", "dc":
-		deployment = jira.DeploymentServer
-	default:
-		return jira.Config{}, fmt.Errorf("JIRA_DEPLOYMENT inválido: use 'cloud' ou 'server'")
-	}
-
-	cfg := jira.Config{
-		BaseURL:    baseURL,
-		Deployment: deployment,
-	}
-
-	switch deployment {
-	case jira.DeploymentCloud:
-		cfg.Email = strings.TrimSpace(os.Getenv("JIRA_EMAIL"))
-		cfg.APIToken = strings.TrimSpace(os.Getenv("JIRA_API_TOKEN"))
-		if cfg.Email == "" || cfg.APIToken == "" {
-			return jira.Config{}, fmt.Errorf("JIRA_EMAIL e JIRA_API_TOKEN são obrigatórios para JIRA_DEPLOYMENT=cloud")
-		}
-	case jira.DeploymentServer:
-		cfg.PersonalAccessToken = strings.TrimSpace(os.Getenv("JIRA_PERSONAL_ACCESS_TOKEN"))
-		if cfg.PersonalAccessToken == "" {
-			return jira.Config{}, fmt.Errorf("JIRA_PERSONAL_ACCESS_TOKEN é obrigatório para JIRA_DEPLOYMENT=server")
-		}
-	}
-
-	return cfg, nil
 }

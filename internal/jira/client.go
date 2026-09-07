@@ -121,7 +121,7 @@ func (c *Client) doJSON(method, path string, query url.Values, body interface{},
 	if err != nil {
 		return fmt.Errorf("calling jira: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -583,7 +583,7 @@ func (c *Client) doDownload(req *http.Request) ([]byte, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("calling jira: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {

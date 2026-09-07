@@ -1,0 +1,63 @@
+name: Prepare Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (for example 0.2.0 or v0.2.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-prep-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    if: github.ref == 'refs/heads/main'
+    environment: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate version
+        id: version
+        env:
+          RAW_VERSION: ${{ inputs.version }}
+        run: |
+          version="${RAW_VERSION#v}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "version must use SemVer: X.Y.Z"
+            exit 1
+          fi
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install git-cliff
+        uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff
+
+      - name: Generate changelog
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: git cliff --bump --tag "v$VERSION" -o CHANGELOG.md
+
+      - name: Create release pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          branch="release/v$VERSION"
+          git add CHANGELOG.md
+          git commit -m "chore(release): prepare for v$VERSION"
+          git push origin "HEAD:$branch"
+          gh pr create --base main --head "$branch" --title "Release v$VERSION" --body "Automated release preparation for v$VERSION."

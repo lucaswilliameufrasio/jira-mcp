@@ -190,7 +190,7 @@ func (s *Server) refreshUser(ctx context.Context, userID string, user userRecord
 	if err != nil {
 		return userRecord{}, err
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode/100 != 2 {
 		return userRecord{}, fmt.Errorf("atlassian refresh failed with HTTP %d", res.StatusCode)
 	}
@@ -288,7 +288,7 @@ func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	token, resources, accountID, err := s.exchangeAtlassian(r.Context(), r.URL.Query().Get("code"), r.URL.Query().Get("state"))
 	if err != nil {
-		http.Error(w, err.Error(), 502)
+		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 	accessToken, err := seal(s.cfg.EncryptionKey, token.AccessToken)
@@ -309,12 +309,12 @@ func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	template.Must(template.New("select").Parse(selectPage)).Execute(w, map[string]any{"State": r.URL.Query().Get("state"), "Resources": resources, "Tools": tools.AvailableToolNames()})
+	_ = template.Must(template.New("select").Parse(selectPage)).Execute(w, map[string]any{"State": r.URL.Query().Get("state"), "Resources": resources, "Tools": tools.AvailableToolNames()})
 }
 
 func (s *Server) complete(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", 405)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	if err := r.ParseForm(); err != nil {
@@ -385,7 +385,7 @@ func (s *Server) exchangeAtlassian(ctx context.Context, code, state string) (atl
 	if err != nil {
 		return atlassianToken{}, nil, "", err
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode/100 != 2 {
 		b, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
 		return atlassianToken{}, nil, "", fmt.Errorf("atlassian token exchange failed: %s", b)
@@ -422,7 +422,7 @@ func getJSON[T any](ctx context.Context, endpoint, accessToken string) (T, error
 	if err != nil {
 		return value, err
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode/100 != 2 {
 		return value, fmt.Errorf("atlassian API returned HTTP %d", res.StatusCode)
 	}
@@ -432,7 +432,7 @@ func getJSON[T any](ctx context.Context, endpoint, accessToken string) (T, error
 
 func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", 405)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	_ = r.ParseForm()

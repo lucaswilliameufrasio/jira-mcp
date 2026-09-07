@@ -5,6 +5,8 @@ Expõe operações comuns do
 Jira como *tools* que qualquer cliente MCP (Claude Desktop, Claude Code, etc.)
 pode chamar.
 
+Landing page e documentação: [docs-site](docs-site/README.md).
+
 ## Ferramentas (tools) disponíveis
 
 | Tool | Descrição |

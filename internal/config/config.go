@@ -95,9 +95,9 @@ func RunSetup(in io.Reader, out io.Writer) error {
 	}
 
 	choices := tools.AvailableToolNames()
-	fmt.Fprintln(out, "\nTools (comma-separated numbers, or 'all'):")
+	_, _ = fmt.Fprintln(out, "\nTools (comma-separated numbers, or 'all'):")
 	for i, name := range choices {
-		fmt.Fprintf(out, "  %d. %s\n", i+1, name)
+		_, _ = fmt.Fprintf(out, "  %d. %s\n", i+1, name)
 	}
 	selection, err := ask(r, out, "Enabled tools", strings.Join(file.Tools, ","), true)
 	if err != nil {
@@ -119,7 +119,7 @@ func RunSetup(in io.Reader, out io.Writer) error {
 	if err := os.WriteFile(path, append(b, '\n'), 0600); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "Saved %s\n", path)
+	_, _ = fmt.Fprintf(out, "Saved %s\n", path)
 	return nil
 }
 
@@ -149,13 +149,13 @@ func toJiraConfig(file File) (jira.Config, error) {
 		cfg.Email = strings.TrimSpace(file.Email)
 		cfg.APIToken = strings.TrimSpace(file.APIToken)
 		if cfg.Email == "" || cfg.APIToken == "" {
-			return jira.Config{}, errors.New("Jira Cloud requires email and API token")
+			return jira.Config{}, errors.New("jira cloud requires email and API token")
 		}
 	case "server", "datacenter", "data-center", "dc":
 		cfg.Deployment = jira.DeploymentServer
 		cfg.PersonalAccessToken = strings.TrimSpace(file.PersonalAccessToken)
 		if cfg.PersonalAccessToken == "" {
-			return jira.Config{}, errors.New("Data Center requires a personal access token")
+			return jira.Config{}, errors.New("data center requires a personal access token")
 		}
 	default:
 		return jira.Config{}, fmt.Errorf("invalid deployment %q", file.Deployment)
@@ -199,9 +199,9 @@ func parseSelection(value string, choices []string) ([]string, error) {
 
 func ask(r *bufio.Reader, out io.Writer, label, current string, required bool) (string, error) {
 	if current != "" {
-		fmt.Fprintf(out, "%s [%s]: ", label, current)
+		_, _ = fmt.Fprintf(out, "%s [%s]: ", label, current)
 	} else {
-		fmt.Fprintf(out, "%s: ", label)
+		_, _ = fmt.Fprintf(out, "%s: ", label)
 	}
 	value, err := r.ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
