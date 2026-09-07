@@ -39,7 +39,9 @@ Optional variables:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `JIRA_MCP_LISTEN_ADDR` | `:$PORT` or `:8080` | Fixed listen address. Leave unset on Railway so the injected `PORT` is used. |
+| `JIRA_MCP_LISTEN_ADDR` | unset | Fixed `host:port`. Takes precedence over `HOST`/`PORT`. Leave unset on Railway. |
+| `HOST` | `0.0.0.0` | Bind address when `JIRA_MCP_LISTEN_ADDR` is unset. |
+| `PORT` | `8080` | Bind port when `JIRA_MCP_LISTEN_ADDR` is unset. Railway injects it automatically. |
 | `JIRA_MCP_ATLASSIAN_AUTH_URL` | `https://auth.atlassian.com` | Override only for tests. |
 | `JIRA_MCP_ATLASSIAN_API_URL` | `https://api.atlassian.com` | Override only for tests. |
 
@@ -58,9 +60,10 @@ The callback host must match the Railway public domain exactly.
 
 - The server exposes `GET /health` unauthenticated; configure the Railway
   healthcheck to use it.
-- The process listens on the `PORT` injected by Railway automatically. Do not
-  set `JIRA_MCP_LISTEN_ADDR` on Railway unless you intentionally want a fixed
-  port.
+- The image is built from `gcr.io/distroless/static-debian13:nonroot` (no
+  shell, runs as a non-root user) and does not declare a fixed port: the
+  process binds to `$HOST:$PORT` (`0.0.0.0` and the Railway-injected `PORT`
+  by default).
 
 ## Deployment Flow
 

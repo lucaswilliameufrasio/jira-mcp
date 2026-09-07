@@ -89,11 +89,15 @@ func runRemote() error {
 	}
 	addr := strings.TrimSpace(os.Getenv("JIRA_MCP_LISTEN_ADDR"))
 	if addr == "" {
-		if port := strings.TrimSpace(os.Getenv("PORT")); port != "" {
-			addr = ":" + port
-		} else {
-			addr = ":8080"
+		host := strings.TrimSpace(os.Getenv("HOST"))
+		if host == "" {
+			host = "0.0.0.0"
 		}
+		port := strings.TrimSpace(os.Getenv("PORT"))
+		if port == "" {
+			port = "8080"
+		}
+		addr = host + ":" + port
 	}
 	return http.ListenAndServe(addr, server)
 }
