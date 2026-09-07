@@ -53,15 +53,19 @@ Personal Access Token).
 
 ## Build
 
-Requer Go 1.21+ instalado (não foi possível compilar neste ambiente por falta
-de acesso à rede — confira o build localmente antes de usar):
-
 ```bash
-cd jira-mcp
-go build -o jira-mcp .
+go build -o jira-mcp ./cmd/jira-mcp
 ```
 
-Isso gera um binário único `jira-mcp` (ou `jira-mcp.exe` no Windows).
+Isso gera um binário único `jira-mcp` (ou `jira-mcp.exe` no Windows). O
+entrypoint fica em `cmd/jira-mcp/main.go`.
+
+## Deploy
+
+- **Servidor remoto (Railway):** modo `remote` via Streamable HTTP + OAuth
+  Atlassian + Valkey. Guia: [`docs/deployment/railway.md`](docs/deployment/railway.md).
+- **Documentação (Cloudflare Pages):** site estático em `docs-site/`.
+  Guia: [`docs/deployment/cloudflare-pages.md`](docs/deployment/cloudflare-pages.md).
 
 ## Testes
 

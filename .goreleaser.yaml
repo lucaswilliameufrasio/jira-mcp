@@ -8,7 +8,7 @@ before:
 
 builds:
   - id: jira-mcp
-    main: .
+    main: ./cmd/jira-mcp
     binary: jira-mcp
     ldflags:
       - -s -w -X main.version={{ .Version }}

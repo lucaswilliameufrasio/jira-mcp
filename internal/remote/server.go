@@ -124,6 +124,9 @@ func New(cfg Config) (*Server, error) {
 		tools.Register(server, client)
 		return server
 	})
+	s.mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, map[string]string{"status": "ok"})
+	})
 	s.mux.Handle("/mcp", s.requireAccessToken(mcpHandler))
 	return s, nil
 }

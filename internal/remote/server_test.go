@@ -43,6 +43,32 @@ func (s *memoryStore) Delete(_ context.Context, key string) error {
 }
 func (s *memoryStore) Close() {}
 
+func TestHealthEndpointIsPublic(t *testing.T) {
+	store := &memoryStore{values: make(map[string][]byte)}
+	server, err := New(Config{PublicURL: "https://mcp.example.test", AtlassianID: "atlassian-client", AtlassianKey: "secret", Store: store, EncryptionKey: make([]byte, 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	res, err := http.Get(ts.URL + "/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("health status = %d", res.StatusCode)
+	}
+	var payload map[string]string
+	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["status"] != "ok" {
+		t.Fatalf("health payload = %#v", payload)
+	}
+}
+
 func TestOAuthMetadataAndRegistration(t *testing.T) {
 	store := &memoryStore{values: make(map[string][]byte)}
 	server, err := New(Config{PublicURL: "https://mcp.example.test", AtlassianID: "atlassian-client", AtlassianKey: "secret", Store: store, EncryptionKey: make([]byte, 32)})

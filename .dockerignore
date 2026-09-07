@@ -1,0 +1,16 @@
+.git
+.github
+.agents
+agents
+.vscode
+.idea
+docs
+docs-site
+node_modules
+tests
+dist
+*.md
+docker-compose.test.yml
+.env
+.env.*
+config.json
