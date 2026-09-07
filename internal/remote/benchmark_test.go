@@ -655,6 +655,7 @@ func setupBenchDocker(ctx context.Context, image string, key []byte) (*benchDock
 		"JIRA_MCP_ATLASSIAN_CLIENT_SECRET=bench",
 		"JIRA_MCP_ENCRYPTION_KEY=" + base64.RawStdEncoding.EncodeToString(key),
 		"JIRA_MCP_ATLASSIAN_API_URL=http://fake-jira",
+		"JIRA_MCP_RATE_LIMIT_RPS=0",
 	}
 	return d, d.valkeyHost, nil
 }
@@ -788,6 +789,7 @@ func TestRemoteBenchmark(t *testing.T) {
 		srv, err := New(Config{
 			PublicURL: "http://127.0.0.1", AtlassianID: "bench", AtlassianKey: "bench",
 			AtlassianAPIURL: fake.server.URL, Store: store, EncryptionKey: key,
+			RateLimitRPS: 0,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -812,6 +814,7 @@ func TestRemoteBenchmark(t *testing.T) {
 			"JIRA_MCP_ATLASSIAN_CLIENT_SECRET=bench",
 			"JIRA_MCP_ENCRYPTION_KEY="+base64.RawStdEncoding.EncodeToString(key),
 			"JIRA_MCP_ATLASSIAN_API_URL="+fake.server.URL,
+			"JIRA_MCP_RATE_LIMIT_RPS=0",
 		)
 		bs, err := startBenchBinary(binaryPath, port, env)
 		if err != nil {

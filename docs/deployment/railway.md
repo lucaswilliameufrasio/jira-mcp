@@ -42,6 +42,7 @@ Optional variables:
 | `JIRA_MCP_LISTEN_ADDR` | unset | Fixed `host:port`. Takes precedence over `HOST`/`PORT`. Leave unset on Railway. |
 | `HOST` | `0.0.0.0` | Bind address when `JIRA_MCP_LISTEN_ADDR` is unset. |
 | `PORT` | `8080` | Bind port when `JIRA_MCP_LISTEN_ADDR` is unset. Railway injects it automatically. |
+| `JIRA_MCP_RATE_LIMIT_RPS` | `20` | Per-client request limit for `/mcp` (burst is 2x, keyed by `X-Forwarded-For`/remote address). `0` disables limiting. |
 | `JIRA_MCP_ATLASSIAN_AUTH_URL` | `https://auth.atlassian.com` | Override only for tests. |
 | `JIRA_MCP_ATLASSIAN_API_URL` | `https://api.atlassian.com` | Override only for tests. |
 
@@ -64,6 +65,20 @@ The callback host must match the Railway public domain exactly.
   shell, runs as a non-root user) and does not declare a fixed port: the
   process binds to `$HOST:$PORT` (`0.0.0.0` and the Railway-injected `PORT`
   by default).
+- The HTTP server sets `ReadHeaderTimeout` (10s) and `IdleTimeout` (2m) to
+  shed slow-loris style connections; request bodies are not time-limited so
+  long-lived MCP streams keep working.
+
+## Token Lifecycle
+
+- MCP access tokens live in Valkey for 30 minutes and are minted once per
+  OAuth dance.
+- `POST /oauth/revoke` with `token=<mcp access token>` (form-encoded) deletes
+  the session immediately and always answers 200 (RFC 7009 semantics). Point
+  client logout at it.
+- Atlassian refresh tokens persist for up to 90 days so access keeps working
+  across token refreshes; users can also revoke the app from their Atlassian
+  account settings.
 
 ## Deployment Flow
 

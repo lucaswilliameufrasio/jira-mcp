@@ -20,7 +20,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"jira-mcp/internal/config"
 	"jira-mcp/internal/jira"
@@ -75,6 +77,14 @@ func runRemote() error {
 	if err != nil {
 		return err
 	}
+	rateLimit := float64(remote.DefaultRateLimitRPS)
+	if raw := strings.TrimSpace(os.Getenv("JIRA_MCP_RATE_LIMIT_RPS")); raw != "" {
+		parsed, err := strconv.ParseFloat(raw, 64)
+		if err != nil {
+			return fmt.Errorf("invalid JIRA_MCP_RATE_LIMIT_RPS %q", raw)
+		}
+		rateLimit = max(0, parsed)
+	}
 	server, err := remote.New(remote.Config{
 		PublicURL:        strings.TrimSpace(os.Getenv("JIRA_MCP_PUBLIC_URL")),
 		AtlassianID:      strings.TrimSpace(os.Getenv("JIRA_MCP_ATLASSIAN_CLIENT_ID")),
@@ -83,6 +93,7 @@ func runRemote() error {
 		AtlassianAPIURL:  strings.TrimSpace(os.Getenv("JIRA_MCP_ATLASSIAN_API_URL")),
 		Store:            store,
 		EncryptionKey:    key,
+		RateLimitRPS:     rateLimit,
 	})
 	if err != nil {
 		return err
@@ -99,5 +110,11 @@ func runRemote() error {
 		}
 		addr = host + ":" + port
 	}
-	return http.ListenAndServe(addr, server)
+	httpServer := &http.Server{
+		Addr:              addr,
+		Handler:           server,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+	}
+	return httpServer.ListenAndServe()
 }

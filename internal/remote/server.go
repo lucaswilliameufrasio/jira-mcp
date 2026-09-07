@@ -12,10 +12,12 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"jira-mcp/internal/jira"
@@ -37,12 +39,25 @@ type Config struct {
 	AtlassianAPIURL  string
 	Store            Store
 	EncryptionKey    []byte
+	// RateLimitRPS caps /mcp requests per client per second (burst is 2x).
+	// Zero disables limiting; production wiring defaults to 20.
+	RateLimitRPS float64
 }
 
 type Server struct {
-	cfg Config
-	mux *http.ServeMux
+	cfg           Config
+	mux           *http.ServeMux
+	oauthFlow     *ipLimiter
+	oauthRegister *ipLimiter
+	mcp           *ipLimiter
 }
+
+// oauthMaxBody bounds OAuth request bodies (registration JSON, form posts).
+const oauthMaxBody = 16 << 10
+
+// DefaultRateLimitRPS is the /mcp per-client rate limit applied by the
+// production wiring when JIRA_MCP_RATE_LIMIT_RPS is unset.
+const DefaultRateLimitRPS = 20
 
 type authorizationRequest struct {
 	ClientID        string `json:"client_id"`
@@ -98,14 +113,21 @@ func New(cfg Config) (*Server, error) {
 	if cfg.PublicURL == "" || cfg.AtlassianID == "" || cfg.AtlassianKey == "" || cfg.Store == nil || len(cfg.EncryptionKey) != 32 {
 		return nil, errors.New("remote server requires public URL, Atlassian OAuth credentials, store and a 32-byte encryption key")
 	}
-	s := &Server{cfg: cfg, mux: http.NewServeMux()}
+	s := &Server{
+		cfg:           cfg,
+		mux:           http.NewServeMux(),
+		oauthFlow:     newIPLimiter(2, 20),
+		oauthRegister: newIPLimiter(1.0/6.0, 10),
+		mcp:           newIPLimiter(cfg.RateLimitRPS, 2*cfg.RateLimitRPS),
+	}
 	s.mux.HandleFunc("/.well-known/oauth-protected-resource", s.protectedResource)
 	s.mux.HandleFunc("/.well-known/oauth-authorization-server", s.authorizationServer)
-	s.mux.HandleFunc("/oauth/register", s.register)
-	s.mux.HandleFunc("/oauth/authorize", s.authorize)
-	s.mux.HandleFunc("/oauth/callback", s.callback)
-	s.mux.HandleFunc("/oauth/complete", s.complete)
-	s.mux.HandleFunc("/oauth/token", s.token)
+	s.mux.Handle("/oauth/register", s.limit(s.oauthRegister, http.HandlerFunc(s.register)))
+	s.mux.Handle("/oauth/authorize", s.limit(s.oauthFlow, http.HandlerFunc(s.authorize)))
+	s.mux.Handle("/oauth/callback", s.limit(s.oauthFlow, http.HandlerFunc(s.callback)))
+	s.mux.Handle("/oauth/complete", s.limit(s.oauthFlow, http.HandlerFunc(s.complete)))
+	s.mux.Handle("/oauth/token", s.limit(s.oauthFlow, http.HandlerFunc(s.token)))
+	s.mux.Handle("/oauth/revoke", s.limit(s.oauthFlow, http.HandlerFunc(s.revoke)))
 	mcpHandler := mcp.NewHTTPHandler(func(req *http.Request) *mcp.Server {
 		user, ok := s.userFromRequest(req)
 		if !ok {
@@ -127,11 +149,22 @@ func New(cfg Config) (*Server, error) {
 	s.mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, map[string]string{"status": "ok"})
 	})
-	s.mux.Handle("/mcp", s.requireAccessToken(mcpHandler))
+	s.mux.Handle("/mcp", s.requireAccessToken(s.limit(s.mcp, mcpHandler)))
 	return s, nil
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.mux.ServeHTTP(w, r) }
+
+func (s *Server) limit(l *ipLimiter, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !l.allow(clientKey(r)) {
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 func (s *Server) requireAccessToken(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -239,6 +272,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, oauthMaxBody)
 	clientID, err := randomToken(18)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
@@ -247,12 +281,40 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		RedirectURIs []string `json:"redirect_uris"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		http.Error(w, "invalid registration request", 400)
+		return
+	}
 	if err := s.cfg.Store.Put(r.Context(), "mcp:client:"+clientID, req, 24*time.Hour); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
 	writeJSON(w, map[string]any{"client_id": clientID, "client_name": "jira-mcp", "redirect_uris": req.RedirectURIs, "token_endpoint_auth_method": "none"})
+}
+
+// revoke implements RFC 7009 semantics for MCP access tokens: it always
+// answers 200 so the endpoint cannot be probed, and silently ignores
+// unknown tokens. Knowing the token is the only requirement, which matches
+// bearer-token trust: whoever holds it could already use it.
+func (s *Server) revoke(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, oauthMaxBody)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid request body", 400)
+		return
+	}
+	if token := r.FormValue("token"); token != "" {
+		_ = s.cfg.Store.Delete(r.Context(), "mcp:token:"+token)
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 func (s *Server) authorize(w http.ResponseWriter, r *http.Request) {
@@ -280,11 +342,13 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
+	state := r.URL.Query().Get("state")
 	var req authorizationRequest
-	if s.cfg.Store.Get(r.Context(), "oauth:state:"+r.URL.Query().Get("state"), &req) != nil {
+	if s.cfg.Store.Get(r.Context(), "oauth:state:"+state, &req) != nil {
 		http.Error(w, "invalid OAuth state", 400)
 		return
 	}
+	_ = s.cfg.Store.Delete(r.Context(), "oauth:state:"+state)
 	if r.URL.Query().Get("error") != "" {
 		http.Error(w, r.URL.Query().Get("error_description"), 400)
 		return
@@ -320,8 +384,9 @@ func (s *Server) complete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, oauthMaxBody)
 	if err := r.ParseForm(); err != nil {
-		http.Error(w, err.Error(), 400)
+		http.Error(w, "invalid request body", 400)
 		return
 	}
 	state := r.FormValue("state")
@@ -349,6 +414,12 @@ func (s *Server) complete(w http.ResponseWriter, r *http.Request) {
 	}
 	if resourceURL == "" {
 		http.Error(w, "invalid Jira site", 400)
+		return
+	}
+	// Single-use: consume the pending state before issuing anything so the
+	// site/tool selection form cannot be replayed within its TTL.
+	if err := s.cfg.Store.Delete(r.Context(), "oauth:pending:"+state); err != nil {
+		http.Error(w, err.Error(), 500)
 		return
 	}
 	userID := pending.AccountID + ":" + cloudID
@@ -438,7 +509,11 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	_ = r.ParseForm()
+	r.Body = http.MaxBytesReader(w, r.Body, oauthMaxBody)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid request body", 400)
+		return
+	}
 	var auth authorizationCode
 	if s.cfg.Store.Get(r.Context(), "oauth:code:"+r.FormValue("code"), &auth) != nil {
 		http.Error(w, "invalid authorization code", 400)
@@ -496,6 +571,78 @@ func contains(values []string, needle string) bool {
 func writeJSON(w http.ResponseWriter, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(value)
+}
+
+// ipLimiter is a per-client token bucket. A nil limiter or a non-positive
+// rate disables limiting entirely (used by tests and benchmarks).
+type ipLimiter struct {
+	mu      sync.Mutex
+	rate    float64
+	burst   float64
+	buckets map[string]*rateBucket
+}
+
+type rateBucket struct {
+	tokens float64
+	last   time.Time
+}
+
+func newIPLimiter(rate, burst float64) *ipLimiter {
+	return &ipLimiter{rate: rate, burst: burst, buckets: make(map[string]*rateBucket)}
+}
+
+func (l *ipLimiter) allow(key string) bool {
+	if l == nil || l.rate <= 0 {
+		return true
+	}
+	now := time.Now()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.buckets) > 10000 {
+		l.evictLocked(now)
+	}
+	b, ok := l.buckets[key]
+	if !ok {
+		b = &rateBucket{tokens: l.burst, last: now}
+		l.buckets[key] = b
+	} else {
+		b.tokens = min(l.burst, b.tokens+now.Sub(b.last).Seconds()*l.rate)
+		b.last = now
+	}
+	if b.tokens < 1 {
+		return false
+	}
+	b.tokens--
+	return true
+}
+
+// evictLocked bounds memory under address-spoofing floods; if eviction cannot
+// keep up, the whole table is dropped, which only costs a brief refill window.
+func (l *ipLimiter) evictLocked(now time.Time) {
+	for key, bucket := range l.buckets {
+		if now.Sub(bucket.last) > time.Hour {
+			delete(l.buckets, key)
+		}
+	}
+	if len(l.buckets) > 20000 {
+		l.buckets = make(map[string]*rateBucket)
+	}
+}
+
+// clientKey picks the best available client identity: the leftmost
+// X-Forwarded-For entry when behind a proxy, the remote host otherwise.
+func clientKey(r *http.Request) string {
+	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+		if i := strings.IndexByte(forwarded, ','); i >= 0 {
+			return strings.TrimSpace(forwarded[:i])
+		}
+		return strings.TrimSpace(forwarded)
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 var selectPage = `<!doctype html><html><body><h1>Connect Jira</h1><form method="post" action="/oauth/complete"><input type="hidden" name="state" value="{{.State}}"><label>Jira site <select name="cloud_id">{{range .Resources}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label><h2>Tools</h2>{{range .Tools}}<label><input type="checkbox" name="tool" value="{{.}}" checked>{{.}}</label><br>{{end}}<button type="submit">Continue</button></form></body></html>`
