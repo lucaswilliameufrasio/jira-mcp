@@ -2,7 +2,18 @@
 
 All notable changes to Jira MCP will be documented in this file.
 
+## [0.3.0] - 2026-09-10
+
+### Features
+
+- Add field metadata tool
+
 ## [0.2.0] - 2026-09-10
+
+### Chores
+
+- *(release)* Prepare for v0.2.0 (#3)
+
 
 ### Features
 
