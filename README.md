@@ -54,10 +54,32 @@ via `nextPageToken` — a Atlassian removeu o endpoint de busca clássico em 202
 quanto **Jira Server/Data Center** (API v2, texto simples, autenticação via
 Personal Access Token).
 
-## Build
+## Install
 
-Alternativamente, baixe um binário pronto (Linux/macOS/Windows, amd64/arm64)
-em [Releases](https://github.com/lucaswilliameufrasio/jira-mcp/releases).
+On Linux or macOS, install the latest verified release into `~/.local/bin`:
+
+```bash
+curl -fsSL https://github.com/lucaswilliameufrasio/jira-mcp/releases/latest/download/jira-mcp-installer.sh | sh
+```
+
+On Windows PowerShell, install the latest release into
+`%LOCALAPPDATA%\jira-mcp\bin`:
+
+```powershell
+irm https://github.com/lucaswilliameufrasio/jira-mcp/releases/latest/download/jira-mcp-installer.ps1 | iex
+```
+
+To install a specific version on Unix, download the installer and run
+`sh jira-mcp-installer.sh --tag v0.1.1`. In PowerShell, run
+`./jira-mcp-installer.ps1 -Tag v0.1.1`. The installers verify the archive
+SHA-256 checksum before installing. This protects against accidental
+corruption, not a compromised GitHub release; the project does not currently
+publish cryptographic signatures.
+
+Alternatively, download a binary manually (Linux/macOS/Windows, amd64/arm64)
+from [Releases](https://github.com/lucaswilliameufrasio/jira-mcp/releases).
+
+## Build
 
 ```bash
 go build -o jira-mcp ./cmd/jira-mcp

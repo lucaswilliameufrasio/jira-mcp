@@ -24,7 +24,8 @@ The release workflow:
 - runs the unit, integration, E2E, and documentation suites;
 - builds Linux, macOS, and Windows binaries for `amd64` and `arm64`;
 - injects the tag version with Go linker flags;
-- creates archives and SHA256 checksums;
+- creates archives, a source archive, and per-artifact SHA256 checksums;
+- publishes `jira-mcp-installer.sh` and `jira-mcp-installer.ps1`;
 - publishes a GitHub Release with generated notes.
 
 The binary reports `dev` for local builds and the release version for tagged
@@ -53,3 +54,23 @@ Before starting a release, verify:
 - `make test` passes;
 - `go test -race -count=1 ./...` passes;
 - no credentials are present in the changelog or artifacts.
+
+## Release Assets
+
+Each release contains six platform archives, one source archive, one checksum
+file per archive and installer, and the two installer scripts. The installers
+expect the platform archive names to follow:
+
+```text
+jira-mcp_<version>_<os>_<arch>.tar.gz
+jira-mcp_<version>_windows_<arch>.zip
+```
+
+The corresponding checksum is published beside each asset with a `.sha256`
+suffix. Run `make release-check` and a local snapshot before pushing a tag:
+
+```bash
+make release-check
+docker run --rm -v "$PWD:/workspace" -w /workspace \
+  goreleaser/goreleaser:latest release --snapshot --clean
+```
