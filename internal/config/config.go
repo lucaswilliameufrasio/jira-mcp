@@ -95,7 +95,7 @@ func RunSetup(in io.Reader, out io.Writer) error {
 	}
 
 	choices := tools.AvailableToolNames()
-	_, _ = fmt.Fprintln(out, "\nTools (comma-separated numbers, or 'all'):")
+	_, _ = fmt.Fprintln(out, "\nTools (comma-separated numbers or names, or 'all'):")
 	for i, name := range choices {
 		_, _ = fmt.Fprintf(out, "  %d. %s\n", i+1, name)
 	}
@@ -179,17 +179,32 @@ func parseSelection(value string, choices []string) ([]string, error) {
 	if value == "all" || value == "" {
 		return append([]string(nil), choices...), nil
 	}
+	index := make(map[string]int, len(choices))
+	for i, name := range choices {
+		index[name] = i
+	}
 	var selected []string
 	seen := map[string]bool{}
+	add := func(name string) {
+		if !seen[name] {
+			selected = append(selected, name)
+			seen[name] = true
+		}
+	}
 	for _, item := range strings.Split(value, ",") {
-		n, err := strconv.Atoi(strings.TrimSpace(item))
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if i, ok := index[item]; ok {
+			add(choices[i])
+			continue
+		}
+		n, err := strconv.Atoi(item)
 		if err != nil || n < 1 || n > len(choices) {
 			return nil, fmt.Errorf("invalid tool selection %q", item)
 		}
-		if !seen[choices[n-1]] {
-			selected = append(selected, choices[n-1])
-			seen[choices[n-1]] = true
-		}
+		add(choices[n-1])
 	}
 	if len(selected) == 0 {
 		return nil, errors.New("select at least one tool")
