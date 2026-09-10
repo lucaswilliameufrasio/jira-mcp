@@ -113,7 +113,7 @@ fi
 [ "$EXPECTED_HASH" = "$ACTUAL_HASH" ] || { echo "Checksum mismatch for ${ASSET}" >&2; exit 1; }
 echo "Checksum verified"
 
-tar --strip-components=1 -xf "$ASSET_FILE" -C "$TMP_DIR"
+tar -xf "$ASSET_FILE" -C "$TMP_DIR"
 [ -f "${TMP_DIR}/jira-mcp" ] || { echo "Archive does not contain jira-mcp" >&2; exit 1; }
 mkdir -p "$BIN_DIR"
 if [ -e "${BIN_DIR}/jira-mcp" ] && [ "$FORCE" != "yes" ]; then
