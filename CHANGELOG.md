@@ -2,6 +2,17 @@
 
 All notable changes to Jira MCP will be documented in this file.
 
+## [0.1.1] - 2026-09-10
+
+### Bug Fixes
+
+- Wizard accepts tool names so Enter keeps the current selection
+
+
+### Documentation
+
+- Position remote mode as self-hosted
+
 ## [0.1.0] - 2026-09-07
 
 ### Bug Fixes
@@ -23,6 +34,8 @@ All notable changes to Jira MCP will be documented in this file.
 - Add full Makefile dev workflow and pin go toolchain to 1.27.1
 
 - Add MIT license, community policies, issue templates and expand CI
+
+- *(release)* Prepare for v0.1.0 (#1)
 
 
 ### Features
