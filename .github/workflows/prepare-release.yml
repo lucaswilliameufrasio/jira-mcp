@@ -1,3 +1,4 @@
+# Pinned to immutable SHAs (supply-chain safety); version in the comment.
 name: Prepare Release
 
 on:
@@ -35,12 +36,12 @@ jobs:
           echo "value=$version" >> "$GITHUB_OUTPUT"
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Install git-cliff
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@c3ec0de9ae7f1019cea21aa96aa0a895b9552063 # v2.87.9
         with:
           tool: git-cliff
 
