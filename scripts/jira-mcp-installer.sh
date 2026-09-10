@@ -118,7 +118,13 @@ tar -xf "$ASSET_FILE" -C "$TMP_DIR"
 mkdir -p "$BIN_DIR"
 if [ -e "${BIN_DIR}/jira-mcp" ] && [ "$FORCE" != "yes" ]; then
   printf 'Replace %s? [y/N] ' "${BIN_DIR}/jira-mcp"
-  if tty -s 2>/dev/null; then read -r answer || answer=n; else answer=n; fi
+  if [ -r /dev/tty ]; then
+    read -r answer </dev/tty || answer=n
+  else
+    answer=n
+    echo "non-interactive, keeping existing installation" >&2
+    echo "Use --force to replace it" >&2
+  fi
   case "$answer" in [Yy]*) ;; *) echo "Installation cancelled"; exit 1 ;; esac
 fi
 install -m 0755 "${TMP_DIR}/jira-mcp" "${BIN_DIR}/jira-mcp"
