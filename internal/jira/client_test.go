@@ -105,3 +105,42 @@ func TestUpdateIssueSendsCustomFields(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestGetFieldMetadataCloudUsesEditMetaEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/rest/api/3/issue/TEST-1/editmeta" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"fields":{"customfield_10073":{"required":true,"name":"Acceptance criteria","schema":{"type":"string"},"operations":["set"]}}}`))
+	}))
+	defer server.Close()
+
+	metadata, err := NewClient(Config{BaseURL: server.URL, Deployment: DeploymentCloud, BearerToken: "token"}).GetFieldMetadata("TEST-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	field := metadata.Fields["customfield_10073"]
+	if field.Name != "Acceptance criteria" || !field.Required || field.Schema["type"] != "string" {
+		t.Fatalf("field = %#v", field)
+	}
+}
+
+func TestGetFieldMetadataServerUsesV2EditMetaEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/rest/api/2/issue/TEST-1/editmeta" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(EditMetadata{Fields: map[string]FieldMetadata{
+			"customfield_10073": {Name: "Acceptance criteria", Operations: []string{"set"}},
+		}})
+	}))
+	defer server.Close()
+
+	metadata, err := NewClient(Config{BaseURL: server.URL, Deployment: DeploymentServer, PersonalAccessToken: "token"}).GetFieldMetadata("TEST-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.Fields["customfield_10073"].Name != "Acceptance criteria" {
+		t.Fatalf("metadata = %#v", metadata)
+	}
+}

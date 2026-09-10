@@ -16,6 +16,7 @@ Landing page e documentação: [docs-site](docs-site/README.md).
 |---|---|
 | `jira_search` | Busca issues via JQL |
 | `jira_get_issue` | Detalhes completos de uma issue |
+| `jira_get_field_metadata` | Metadata dos campos editáveis, incluindo custom fields |
 | `jira_create_issue` | Cria uma nova issue |
 | `jira_update_issue` | Atualiza campos de uma issue existente |
 | `jira_add_comment` | Adiciona comentário a uma issue |

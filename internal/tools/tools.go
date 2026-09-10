@@ -396,6 +396,11 @@ type getIssueArgs struct {
 	Fields   []string `json:"fields"`
 }
 
+type getFieldMetadataArgs struct {
+	IssueKey   string `json:"issue_key"`
+	CustomOnly *bool  `json:"custom_only"`
+}
+
 type createIssueArgs struct {
 	ProjectKey  string                 `json:"project_key"`
 	IssueType   string                 `json:"issue_type"`
@@ -486,6 +491,24 @@ func handleGetIssue(client *jira.Client) func(json.RawMessage) (string, error) {
 			return "", friendlyError(err)
 		}
 		return formatIssue(issue), nil
+	}
+}
+
+func handleGetFieldMetadata(client *jira.Client) func(json.RawMessage) (string, error) {
+	return func(raw json.RawMessage) (string, error) {
+		var args getFieldMetadataArgs
+		if err := unmarshal(raw, &args); err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(args.IssueKey) == "" {
+			return "", fmt.Errorf("o parâmetro 'issue_key' é obrigatório")
+		}
+		metadata, err := client.GetFieldMetadata(args.IssueKey)
+		if err != nil {
+			return "", friendlyError(err)
+		}
+		customOnly := args.CustomOnly == nil || *args.CustomOnly
+		return formatFieldMetadata(args.IssueKey, metadata, customOnly), nil
 	}
 }
 
@@ -1128,6 +1151,46 @@ func formatIssue(issue *jira.Issue) string {
 	}
 	if desc, ok := f["description"]; ok && desc != nil {
 		fmt.Fprintf(&sb, "Descrição: %s\n", extractPlainText(desc))
+	}
+	return sb.String()
+}
+
+func formatFieldMetadata(issueKey string, metadata *jira.EditMetadata, customOnly bool) string {
+	var keys []string
+	for key := range metadata.Fields {
+		if !customOnly || strings.HasPrefix(key, "customfield_") {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	if len(keys) == 0 {
+		if customOnly {
+			return fmt.Sprintf("Nenhum campo customizado editável encontrado para %s.", issueKey)
+		}
+		return fmt.Sprintf("Nenhum campo editável encontrado para %s.", issueKey)
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Metadata dos campos editáveis de %s:\n", issueKey)
+	for _, key := range keys {
+		field := metadata.Fields[key]
+		name := field.Name
+		if name == "" {
+			name = key
+		}
+		fmt.Fprintf(&sb, "- %s: %s\n", key, name)
+		fmt.Fprintf(&sb, "  obrigatório: %t\n", field.Required)
+		if fieldType, ok := field.Schema["type"].(string); ok && fieldType != "" {
+			fmt.Fprintf(&sb, "  tipo: %s\n", fieldType)
+		}
+		if len(field.Operations) > 0 {
+			fmt.Fprintf(&sb, "  operações: %s\n", strings.Join(field.Operations, ", "))
+		}
+		if len(field.AllowedValues) > 0 {
+			if encoded, err := json.Marshal(field.AllowedValues); err == nil {
+				fmt.Fprintf(&sb, "  valores permitidos: %s\n", encoded)
+			}
+		}
 	}
 	return sb.String()
 }

@@ -219,6 +219,21 @@ type CreateIssueLinkInput struct {
 	Comment      string
 }
 
+type FieldMetadata struct {
+	Required        bool                   `json:"required"`
+	Schema          map[string]interface{} `json:"schema,omitempty"`
+	Name            string                 `json:"name"`
+	Key             string                 `json:"key"`
+	Operations      []string               `json:"operations,omitempty"`
+	AllowedValues   []interface{}          `json:"allowedValues,omitempty"`
+	HasDefaultValue bool                   `json:"hasDefaultValue,omitempty"`
+	DefaultValue    interface{}            `json:"defaultValue,omitempty"`
+}
+
+type EditMetadata struct {
+	Fields map[string]FieldMetadata `json:"fields"`
+}
+
 type SearchResult struct {
 	// Populated on Jira Server/Data Center (api/2 classic search).
 	StartAt    int `json:"startAt,omitempty"`
@@ -303,6 +318,17 @@ func (c *Client) GetIssue(issueKey string, fields []string, expand []string) (*I
 	}
 	var out Issue
 	if err := c.doJSON(http.MethodGet, c.apiPath("/issue/"+url.PathEscape(issueKey)), q, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// GetFieldMetadata returns the fields available for editing an issue, including
+// custom field names, schemas, allowed values, and supported operations.
+func (c *Client) GetFieldMetadata(issueKey string) (*EditMetadata, error) {
+	var out EditMetadata
+	path := c.apiPath("/issue/" + url.PathEscape(issueKey) + "/editmeta")
+	if err := c.doJSON(http.MethodGet, path, nil, nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil

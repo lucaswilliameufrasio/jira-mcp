@@ -46,3 +46,43 @@ func TestHandleUpdateIssueAcceptsCustomFields(t *testing.T) {
 		t.Fatalf("result = %q", got)
 	}
 }
+
+func TestFormatFieldMetadataFiltersCustomFieldsByDefault(t *testing.T) {
+	metadata := &jira.EditMetadata{Fields: map[string]jira.FieldMetadata{
+		"summary": {
+			Name:       "Summary",
+			Schema:     map[string]interface{}{"type": "string"},
+			Operations: []string{"set"},
+		},
+		"customfield_10073": {
+			Name:       "Acceptance criteria",
+			Required:   true,
+			Schema:     map[string]interface{}{"type": "string"},
+			Operations: []string{"set"},
+		},
+	}}
+
+	got := formatFieldMetadata("TEST-1", metadata, true)
+	if !strings.Contains(got, "customfield_10073: Acceptance criteria") || strings.Contains(got, "Summary") {
+		t.Fatalf("formatted metadata = %q", got)
+	}
+}
+
+func TestHandleGetFieldMetadataCanIncludeStandardFields(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(jira.EditMetadata{Fields: map[string]jira.FieldMetadata{
+			"summary":           {Name: "Summary"},
+			"customfield_10073": {Name: "Acceptance criteria"},
+		}})
+	}))
+	defer server.Close()
+
+	client := jira.NewClient(jira.Config{BaseURL: server.URL, Deployment: jira.DeploymentCloud, BearerToken: "token"})
+	got, err := handleGetFieldMetadata(client)(json.RawMessage(`{"issue_key":"TEST-1","custom_only":false}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "Summary") || !strings.Contains(got, "Acceptance criteria") {
+		t.Fatalf("result = %q", got)
+	}
+}
