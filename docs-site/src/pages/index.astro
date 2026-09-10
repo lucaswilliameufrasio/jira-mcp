@@ -79,7 +79,21 @@ go build -o jira-mcp .
 ./jira-mcp setup
 
 <span class="comment"># run over stdio</span>
-./jira-mcp</code></pre>
+ ./jira-mcp</code></pre>
+      </section>
+
+      <section class="quick-start remote-start" id="remote-setup">
+        <div><p class="eyebrow">02 / Self-hosted HTTP</p><h2>Run your own shared instance.</h2><p>For teams, deploy the same binary on infrastructure you control. You provide the public URL, an Atlassian OAuth app, Valkey, and the encryption key. There is no hosted Jira MCP service behind this project.</p><p class="remote-note">Register <code>/oauth/callback</code> as the OAuth callback, expose <code>/mcp</code>, and keep all secrets in your platform's environment variables.</p><a class="text-link" href="https://github.com/lucaswilliameufrasio/jira-mcp/blob/main/docs/deployment/railway.md">Read the self-hosting guide <span aria-hidden="true">&#8594;</span></a></div>
+        <pre><code><span class="comment"># required environment</span>
+JIRA_MCP_PUBLIC_URL=https://mcp.example.com
+JIRA_MCP_ATLASSIAN_CLIENT_ID=...
+JIRA_MCP_ATLASSIAN_CLIENT_SECRET=...
+JIRA_MCP_ENCRYPTION_KEY=...
+VALKEY_URL=rediss://...
+
+<span class="comment"># run anywhere with Docker</span>
+docker build -t jira-mcp .
+docker run --env-file .env -p 8080:8080 jira-mcp</code></pre>
       </section>
 
       <section class="footer-cta">
@@ -125,8 +139,8 @@ go build -o jira-mcp .
   .terminal-body p { margin: 0; }.green { color: #d8fa5c; }.muted { color: #7f8b7d; }.cursor { color: #d8fa5c; }
   .feature-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: #354033; border: 1px solid #354033; }
   .feature-grid article { min-height: 230px; padding: 29px; background: #151a16; }.icon { color: #d8fa5c; font: 12px ui-monospace, monospace; }.feature-grid h2 { margin: 22px 0 12px; font-size: 22px; }.feature-grid p, .quick-start p { color: #929d90; line-height: 1.6; }
-  .quick-start { display: grid; grid-template-columns: .8fr 1.2fr; gap: 90px; align-items: center; padding: 145px 50px; }.quick-start h2 { font-size: 46px; }.quick-start pre { margin: 0; padding: 25px; overflow: auto; border: 1px solid #354033; border-radius: 12px; background: #151a16; color: #dfe9d8; line-height: 1.8; }.comment { color: #6f806a; }
+   .quick-start { display: grid; grid-template-columns: .8fr 1.2fr; gap: 90px; align-items: center; padding: 145px 50px; }.quick-start h2 { font-size: 46px; }.quick-start pre { margin: 0; padding: 25px; overflow: auto; border: 1px solid #354033; border-radius: 12px; background: #151a16; color: #dfe9d8; line-height: 1.8; }.remote-start { padding-top: 0; }.remote-note { margin-top: 18px; font-size: 14px; }.remote-note code, .text-link { color: #d8fa5c; }.text-link { display: inline-block; margin-top: 24px; font-size: 14px; font-weight: 700; }.comment { color: #6f806a; }
   .footer-cta { padding: 90px 0 110px; text-align: center; border-top: 1px solid #293128; }.footer-cta h2 { margin: 20px auto 30px; font-size: clamp(40px, 6vw, 70px); }.footer-cta .button { margin-top: 5px; }
   footer { display: flex; justify-content: space-between; padding: 20px 0 28px; color: #697367; font-size: 12px; border-top: 1px solid #293128; }
-  @media (max-width: 760px) { .shell { padding: 0 18px; }.nav-links a:not(.nav-cta) { display: none; }.hero { display: block; padding: 65px 0 75px; }.hero-copy { margin-bottom: 65px; } .hero h1 { font-size: 57px; }.feature-grid, .quick-start { grid-template-columns: 1fr; }.quick-start { gap: 35px; padding: 90px 0; }.quick-start h2 { font-size: 39px; }.terminal { transform: none; box-shadow: 10px 12px 0 #0b0e0c; } footer { gap: 20px; flex-direction: column; } }
+   @media (max-width: 760px) { .shell { padding: 0 18px; }.nav-links a:not(.nav-cta) { display: none; }.hero { display: block; padding: 65px 0 75px; }.hero-copy { margin-bottom: 65px; } .hero h1 { font-size: 57px; }.feature-grid, .quick-start { grid-template-columns: 1fr; }.quick-start { gap: 35px; padding: 90px 0; }.remote-start { padding-top: 0; }.quick-start h2 { font-size: 39px; }.terminal { transform: none; box-shadow: 10px 12px 0 #0b0e0c; } footer { gap: 20px; flex-direction: column; } }
 </style>
