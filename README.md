@@ -31,6 +31,14 @@ Landing page e documentação: [docs-site](docs-site/README.md).
 | `jira_list_attachments` | Lista anexos (imagens, vídeos, docs) de uma issue |
 | `jira_get_attachment` | Baixa um anexo — imagens são retornadas inline para a IA analisar |
 
+`jira_get_issue` solicita todos os campos por padrão, incluindo `customfield_*`.
+Para atualizar campos customizados, use `fields` com o nome API do campo ou o mapa
+explícito `custom_fields`, por exemplo:
+
+```json
+{"issue_key":"PROJ-123","custom_fields":{"customfield_10001":"valor"}}
+```
+
 ### Sobre boards e anexos
 
 - **Boards/sprints** usam uma API separada do Jira (`/rest/agile/1.0`), diferente

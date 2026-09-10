@@ -188,6 +188,37 @@ type Issue struct {
 	Fields map[string]interface{} `json:"fields,omitempty"`
 }
 
+type LinkedIssue struct {
+	ID     string                 `json:"id"`
+	Key    string                 `json:"key"`
+	Fields map[string]interface{} `json:"fields,omitempty"`
+}
+
+type IssueLinkType struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Inward  string `json:"inward"`
+	Outward string `json:"outward"`
+}
+
+type IssueLink struct {
+	ID           string        `json:"id"`
+	Type         IssueLinkType `json:"type"`
+	InwardIssue  LinkedIssue   `json:"inwardIssue"`
+	OutwardIssue LinkedIssue   `json:"outwardIssue"`
+}
+
+type issueLinkTypesResponse struct {
+	IssueLinkTypes []IssueLinkType `json:"issueLinkTypes"`
+}
+
+type CreateIssueLinkInput struct {
+	LinkType     string
+	InwardIssue  string
+	OutwardIssue string
+	Comment      string
+}
+
 type SearchResult struct {
 	// Populated on Jira Server/Data Center (api/2 classic search).
 	StartAt    int `json:"startAt,omitempty"`
@@ -275,6 +306,86 @@ func (c *Client) GetIssue(issueKey string, fields []string, expand []string) (*I
 		return nil, err
 	}
 	return &out, nil
+}
+
+// ListIssueLinks returns all links attached to an issue.
+func (c *Client) ListIssueLinks(issueKey string) ([]IssueLink, error) {
+	issue, err := c.GetIssue(issueKey, []string{"issuelinks"}, nil)
+	if err != nil {
+		return nil, err
+	}
+	raw, ok := issue.Fields["issuelinks"]
+	if !ok || raw == nil {
+		return nil, nil
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("re-encoding issue links: %w", err)
+	}
+	var links []IssueLink
+	if err := json.Unmarshal(b, &links); err != nil {
+		return nil, fmt.Errorf("decoding issue links: %w", err)
+	}
+	return links, nil
+}
+
+// ListIssueLinkTypes returns the formal link types available in this Jira
+// instance, including their inward and outward descriptions.
+func (c *Client) ListIssueLinkTypes() ([]IssueLinkType, error) {
+	var out issueLinkTypesResponse
+	if err := c.doJSON(http.MethodGet, c.apiPath("/issueLinkType"), nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return out.IssueLinkTypes, nil
+}
+
+// CreateIssueLink creates a directional link between two issues.
+func (c *Client) CreateIssueLink(in CreateIssueLinkInput) error {
+	body := map[string]interface{}{
+		"type":         map[string]string{"name": in.LinkType},
+		"inwardIssue":  map[string]string{"key": in.InwardIssue},
+		"outwardIssue": map[string]string{"key": in.OutwardIssue},
+	}
+	if strings.TrimSpace(in.Comment) != "" {
+		body["comment"] = map[string]interface{}{"body": c.encodeDescription(in.Comment)}
+	}
+	return c.doJSON(http.MethodPost, c.apiPath("/issueLink"), nil, body, nil)
+}
+
+// GetIssueLink returns one link by its Jira link ID.
+func (c *Client) GetIssueLink(linkID string) (*IssueLink, error) {
+	var out IssueLink
+	if err := c.doJSON(http.MethodGet, c.apiPath("/issueLink/"+url.PathEscape(linkID)), nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// DeleteIssueLink deletes a link by its Jira link ID.
+func (c *Client) DeleteIssueLink(linkID string) error {
+	return c.doJSON(http.MethodDelete, c.apiPath("/issueLink/"+url.PathEscape(linkID)), nil, nil, nil)
+}
+
+// UpdateIssueLink replaces a link because Jira has no update endpoint for its
+// type or direction. The replacement receives a new link ID.
+func (c *Client) UpdateIssueLink(linkID string, in CreateIssueLinkInput) error {
+	current, err := c.GetIssueLink(linkID)
+	if err != nil {
+		return err
+	}
+	if in.LinkType == "" {
+		in.LinkType = current.Type.Name
+	}
+	if in.InwardIssue == "" {
+		in.InwardIssue = current.InwardIssue.Key
+	}
+	if in.OutwardIssue == "" {
+		in.OutwardIssue = current.OutwardIssue.Key
+	}
+	if err := c.DeleteIssueLink(linkID); err != nil {
+		return err
+	}
+	return c.CreateIssueLink(in)
 }
 
 // CreateIssueInput describes the fields needed to create a new issue.

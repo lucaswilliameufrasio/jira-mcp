@@ -62,3 +62,46 @@ func TestAPIErrorPreservesStatusAndBody(t *testing.T) {
 		t.Fatalf("error = %#v", err)
 	}
 }
+
+func TestGetIssueRequestsAllFields(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/rest/api/3/issue/TEST-1" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("fields"); got != "*all" {
+			t.Fatalf("fields = %q", got)
+		}
+		_ = json.NewEncoder(w).Encode(Issue{Key: "TEST-1", Fields: map[string]interface{}{"customfield_10001": "value"}})
+	}))
+	defer server.Close()
+
+	issue, err := NewClient(Config{BaseURL: server.URL, Deployment: DeploymentCloud, BearerToken: "token"}).GetIssue("TEST-1", []string{"*all"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issue.Fields["customfield_10001"] != "value" {
+		t.Fatalf("fields = %#v", issue.Fields)
+	}
+}
+
+func TestUpdateIssueSendsCustomFields(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/rest/api/3/issue/TEST-1" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["fields"]["customfield_10001"] != "value" {
+			t.Fatalf("body = %#v", body)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	err := NewClient(Config{BaseURL: server.URL, Deployment: DeploymentCloud, BearerToken: "token"}).UpdateIssue("TEST-1", map[string]interface{}{"customfield_10001": "value"})
+	if err != nil {
+		t.Fatal(err)
+	}
+}

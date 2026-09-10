@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -62,7 +63,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 				"fields": map[string]interface{}{
 					"type":        "array",
 					"items":       map[string]interface{}{"type": "string"},
-					"description": "Campos específicos a retornar. Se omitido, retorna os campos mais comuns.",
+					"description": "Campos específicos a retornar. Se omitido, retorna todos os campos, incluindo customfield_*.",
 				},
 			},
 			Required: []string{"issue_key"},
@@ -112,10 +113,14 @@ func Register(s *mcp.Server, client *jira.Client) {
 				},
 				"fields": map[string]interface{}{
 					"type":        "object",
-					"description": "Mapa de campos a atualizar por nome de API do Jira, ex: {\"summary\":\"Novo título\",\"priority\":{\"name\":\"High\"}}.",
+					"description": "Mapa de campos a atualizar por nome de API do Jira, incluindo customfield_*, ex: {\"summary\":\"Novo título\",\"priority\":{\"name\":\"High\"}}.",
+				},
+				"custom_fields": map[string]interface{}{
+					"type":        "object",
+					"description": "Mapa explícito de campos customizados, por exemplo {\"customfield_10001\":\"valor\"}. As chaves devem ser os nomes API customfield_*.",
 				},
 			},
-			Required: []string{"issue_key", "fields"},
+			Required: []string{"issue_key"},
 		},
 	}, mcp.TextHandler(handleUpdateIssue(client)))
 
@@ -167,6 +172,65 @@ func Register(s *mcp.Server, client *jira.Client) {
 			Required: []string{"issue_key"},
 		},
 	}, mcp.TextHandler(handleTransitionIssue(client)))
+
+	// --- Issue links ---
+
+	s.RegisterTool(mcp.Tool{
+		Name:        "jira_list_issue_link_types",
+		Description: "Lista os tipos formais de links disponíveis no Jira, incluindo as descrições inward e outward (por exemplo, Relates/relates to e Blocks/blocks/blocked by).",
+		InputSchema: mcp.InputSchema{Type: "object", Properties: map[string]interface{}{}},
+	}, mcp.TextHandler(handleListIssueLinkTypes(client)))
+
+	s.RegisterTool(mcp.Tool{
+		Name:        "jira_list_issue_links",
+		Description: "Lê os links de uma issue, mostrando ID, tipo, direção e issue relacionada.",
+		InputSchema: mcp.InputSchema{
+			Type:       "object",
+			Properties: map[string]interface{}{"issue_key": map[string]interface{}{"type": "string", "description": "Chave ou ID da issue."}},
+			Required:   []string{"issue_key"},
+		},
+	}, mcp.TextHandler(handleListIssueLinks(client)))
+
+	s.RegisterTool(mcp.Tool{
+		Name:        "jira_create_issue_link",
+		Description: "Cria um link formal entre duas issues. Use jira_list_issue_link_types para consultar os nomes e as direções suportadas.",
+		InputSchema: mcp.InputSchema{
+			Type: "object",
+			Properties: map[string]interface{}{
+				"link_type":     map[string]interface{}{"type": "string", "description": "Nome formal do tipo, ex: Relates ou Blocks. Também aceita aliases como 'relates to', 'blocks' e 'blocked by'."},
+				"inward_issue":  map[string]interface{}{"type": "string", "description": "Issue no lado inward da relação."},
+				"outward_issue": map[string]interface{}{"type": "string", "description": "Issue no lado outward da relação."},
+				"comment":       map[string]interface{}{"type": "string", "description": "Comentário opcional adicionado à issue outward."},
+			},
+			Required: []string{"link_type", "inward_issue", "outward_issue"},
+		},
+	}, mcp.TextHandler(handleCreateIssueLink(client)))
+
+	s.RegisterTool(mcp.Tool{
+		Name:        "jira_update_issue_link",
+		Description: "Atualiza um link formal. Como o Jira não oferece PUT para tipo/direção, a operação recria o link e o novo link recebe outro ID.",
+		InputSchema: mcp.InputSchema{
+			Type: "object",
+			Properties: map[string]interface{}{
+				"link_id":       map[string]interface{}{"type": "string", "description": "ID do link retornado por jira_list_issue_links."},
+				"link_type":     map[string]interface{}{"type": "string", "description": "Novo tipo formal ou alias."},
+				"inward_issue":  map[string]interface{}{"type": "string", "description": "Nova issue inward, opcional."},
+				"outward_issue": map[string]interface{}{"type": "string", "description": "Nova issue outward, opcional."},
+				"comment":       map[string]interface{}{"type": "string", "description": "Novo comentário opcional."},
+			},
+			Required: []string{"link_id"},
+		},
+	}, mcp.TextHandler(handleUpdateIssueLink(client)))
+
+	s.RegisterTool(mcp.Tool{
+		Name:        "jira_delete_issue_link",
+		Description: "Remove um link entre issues pelo ID retornado por jira_list_issue_links.",
+		InputSchema: mcp.InputSchema{
+			Type:       "object",
+			Properties: map[string]interface{}{"link_id": map[string]interface{}{"type": "string", "description": "ID do link."}},
+			Required:   []string{"link_id"},
+		},
+	}, mcp.TextHandler(handleDeleteIssueLink(client)))
 
 	s.RegisterTool(mcp.Tool{
 		Name:        "jira_list_projects",
@@ -310,6 +374,8 @@ func AvailableToolNames() []string {
 	return []string{
 		"jira_search", "jira_get_issue", "jira_create_issue", "jira_update_issue",
 		"jira_add_comment", "jira_list_transitions", "jira_transition_issue",
+		"jira_list_issue_link_types", "jira_list_issue_links", "jira_create_issue_link",
+		"jira_update_issue_link", "jira_delete_issue_link",
 		"jira_list_projects", "jira_assign_issue", "jira_list_boards", "jira_get_board",
 		"jira_list_sprints", "jira_board_issues", "jira_sprint_issues",
 		"jira_list_attachments", "jira_get_attachment",
@@ -339,8 +405,9 @@ type createIssueArgs struct {
 }
 
 type updateIssueArgs struct {
-	IssueKey string                 `json:"issue_key"`
-	Fields   map[string]interface{} `json:"fields"`
+	IssueKey     string                 `json:"issue_key"`
+	Fields       map[string]interface{} `json:"fields"`
+	CustomFields map[string]interface{} `json:"custom_fields"`
 }
 
 type addCommentArgs struct {
@@ -357,6 +424,18 @@ type transitionIssueArgs struct {
 	TransitionID   string `json:"transition_id"`
 	TransitionName string `json:"transition_name"`
 	Comment        string `json:"comment"`
+}
+
+type listIssueLinksArgs struct {
+	IssueKey string `json:"issue_key"`
+}
+
+type issueLinkArgs struct {
+	LinkID       string `json:"link_id"`
+	LinkType     string `json:"link_type"`
+	InwardIssue  string `json:"inward_issue"`
+	OutwardIssue string `json:"outward_issue"`
+	Comment      string `json:"comment"`
 }
 
 type assignIssueArgs struct {
@@ -379,7 +458,7 @@ func handleSearch(client *jira.Client) func(json.RawMessage) (string, error) {
 		}
 		fields := args.Fields
 		if len(fields) == 0 {
-			fields = defaultIssueFields
+			fields = []string{"*all"}
 		}
 		result, err := client.SearchIssues(args.JQL, args.MaxResults, fields, args.PageToken)
 		if err != nil {
@@ -400,7 +479,7 @@ func handleGetIssue(client *jira.Client) func(json.RawMessage) (string, error) {
 		}
 		fields := args.Fields
 		if len(fields) == 0 {
-			fields = defaultIssueFields
+			fields = []string{"*all"}
 		}
 		issue, err := client.GetIssue(args.IssueKey, fields, nil)
 		if err != nil {
@@ -439,10 +518,20 @@ func handleUpdateIssue(client *jira.Client) func(json.RawMessage) (string, error
 		if err := unmarshal(raw, &args); err != nil {
 			return "", err
 		}
-		if args.IssueKey == "" || len(args.Fields) == 0 {
-			return "", fmt.Errorf("'issue_key' e 'fields' são obrigatórios")
+		if args.IssueKey == "" || (len(args.Fields) == 0 && len(args.CustomFields) == 0) {
+			return "", fmt.Errorf("'issue_key' e 'fields' ou 'custom_fields' são obrigatórios")
 		}
-		if err := client.UpdateIssue(args.IssueKey, args.Fields); err != nil {
+		fields := make(map[string]interface{}, len(args.Fields)+len(args.CustomFields))
+		for key, value := range args.Fields {
+			fields[key] = value
+		}
+		for key, value := range args.CustomFields {
+			if !strings.HasPrefix(key, "customfield_") {
+				return "", fmt.Errorf("custom field inválido %q; use o nome API customfield_*", key)
+			}
+			fields[key] = value
+		}
+		if err := client.UpdateIssue(args.IssueKey, fields); err != nil {
 			return "", friendlyError(err)
 		}
 		return fmt.Sprintf("Issue %s atualizada com sucesso.", args.IssueKey), nil
@@ -524,6 +613,129 @@ func handleTransitionIssue(client *jira.Client) func(json.RawMessage) (string, e
 		}
 		return fmt.Sprintf("Issue %s transicionada com sucesso.", args.IssueKey), nil
 	}
+}
+
+func handleListIssueLinkTypes(client *jira.Client) func(json.RawMessage) (string, error) {
+	return func(raw json.RawMessage) (string, error) {
+		types, err := client.ListIssueLinkTypes()
+		if err != nil {
+			return "", friendlyError(err)
+		}
+		if len(types) == 0 {
+			return "Nenhum tipo de issue link disponível.", nil
+		}
+		var sb strings.Builder
+		sb.WriteString("Tipos de issue link disponíveis:\n")
+		for _, linkType := range types {
+			fmt.Fprintf(&sb, "- %s (inward=%q, outward=%q, id=%s)\n", linkType.Name, linkType.Inward, linkType.Outward, linkType.ID)
+		}
+		return sb.String(), nil
+	}
+}
+
+func handleListIssueLinks(client *jira.Client) func(json.RawMessage) (string, error) {
+	return func(raw json.RawMessage) (string, error) {
+		var args listIssueLinksArgs
+		if err := unmarshal(raw, &args); err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(args.IssueKey) == "" {
+			return "", fmt.Errorf("o parâmetro 'issue_key' é obrigatório")
+		}
+		links, err := client.ListIssueLinks(args.IssueKey)
+		if err != nil {
+			return "", friendlyError(err)
+		}
+		if len(links) == 0 {
+			return fmt.Sprintf("A issue %s não possui links.", args.IssueKey), nil
+		}
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "Links de %s:\n", args.IssueKey)
+		for _, link := range links {
+			fmt.Fprintf(&sb, "- id=%s  tipo=%q  inward=%s (%s)  outward=%s (%s)\n",
+				link.ID, link.Type.Name, link.InwardIssue.Key, link.Type.Inward, link.OutwardIssue.Key, link.Type.Outward)
+		}
+		return sb.String(), nil
+	}
+}
+
+func handleCreateIssueLink(client *jira.Client) func(json.RawMessage) (string, error) {
+	return func(raw json.RawMessage) (string, error) {
+		var args issueLinkArgs
+		if err := unmarshal(raw, &args); err != nil {
+			return "", err
+		}
+		if args.LinkType == "" || args.InwardIssue == "" || args.OutwardIssue == "" {
+			return "", fmt.Errorf("'link_type', 'inward_issue' e 'outward_issue' são obrigatórios")
+		}
+		args.LinkType = normalizeLinkType(args.LinkType)
+		if err := client.CreateIssueLink(jira.CreateIssueLinkInput{
+			LinkType: args.LinkType, InwardIssue: args.InwardIssue, OutwardIssue: args.OutwardIssue, Comment: args.Comment,
+		}); err != nil {
+			return "", friendlyError(err)
+		}
+		return fmt.Sprintf("Link %s criado: %s %s %s.", args.LinkType, args.InwardIssue, args.LinkType, args.OutwardIssue), nil
+	}
+}
+
+func handleUpdateIssueLink(client *jira.Client) func(json.RawMessage) (string, error) {
+	return func(raw json.RawMessage) (string, error) {
+		var args issueLinkArgs
+		if err := unmarshal(raw, &args); err != nil {
+			return "", err
+		}
+		if args.LinkID == "" {
+			return "", fmt.Errorf("o parâmetro 'link_id' é obrigatório")
+		}
+		if args.LinkType == "" && args.InwardIssue == "" && args.OutwardIssue == "" && args.Comment == "" {
+			return "", fmt.Errorf("informe ao menos um campo para atualizar")
+		}
+		if args.LinkType != "" {
+			args.LinkType = normalizeLinkType(args.LinkType)
+		}
+		if err := client.UpdateIssueLink(args.LinkID, jira.CreateIssueLinkInput{
+			LinkType: args.LinkType, InwardIssue: args.InwardIssue, OutwardIssue: args.OutwardIssue, Comment: args.Comment,
+		}); err != nil {
+			return "", friendlyError(err)
+		}
+		return fmt.Sprintf("Link %s atualizado; o Jira recriou o link com um novo ID.", args.LinkID), nil
+	}
+}
+
+func handleDeleteIssueLink(client *jira.Client) func(json.RawMessage) (string, error) {
+	return func(raw json.RawMessage) (string, error) {
+		var args issueLinkArgs
+		if err := unmarshal(raw, &args); err != nil {
+			return "", err
+		}
+		if args.LinkID == "" {
+			return "", fmt.Errorf("o parâmetro 'link_id' é obrigatório")
+		}
+		if err := client.DeleteIssueLink(args.LinkID); err != nil {
+			return "", friendlyError(err)
+		}
+		return fmt.Sprintf("Link %s removido com sucesso.", args.LinkID), nil
+	}
+}
+
+func normalizeLinkType(value string) string {
+	compact := strings.ToLower(strings.TrimSpace(value))
+	aliases := map[string]string{
+		"relates":       "Relates",
+		"relates to":    "Relates",
+		"blocks":        "Blocks",
+		"blocked by":    "Blocks",
+		"duplicates":    "Duplicate",
+		"duplicated by": "Duplicate",
+		"clones":        "Cloners",
+		"cloned by":     "Cloners",
+		"causes":        "Causes",
+		"caused by":     "Causes",
+	}
+	if normalized, ok := aliases[compact]; ok {
+		return normalized
+	}
+	return strings.TrimSpace(value)
 }
 
 func handleListProjects(client *jira.Client) func(json.RawMessage) (string, error) {
@@ -900,6 +1112,19 @@ func formatIssue(issue *jira.Issue) string {
 	}
 	if updated := fieldString(f, "updated"); updated != "" {
 		fmt.Fprintf(&sb, "Atualizado em: %s\n", updated)
+	}
+	var customFields []string
+	for key := range f {
+		if strings.HasPrefix(key, "customfield_") {
+			customFields = append(customFields, key)
+		}
+	}
+	sort.Strings(customFields)
+	for _, key := range customFields {
+		value, err := json.Marshal(f[key])
+		if err == nil {
+			fmt.Fprintf(&sb, "%s: %s\n", key, string(value))
+		}
 	}
 	if desc, ok := f["description"]; ok && desc != nil {
 		fmt.Fprintf(&sb, "Descrição: %s\n", extractPlainText(desc))
