@@ -124,7 +124,6 @@ fi
 install -m 0755 "${TMP_DIR}/jira-mcp" "${BIN_DIR}/jira-mcp"
 
 echo "Installed jira-mcp ${TAG} to ${BIN_DIR}/jira-mcp"
-"${BIN_DIR}/jira-mcp" --version || true
 case ":${PATH}:" in
   *:"${BIN_DIR}":*) ;;
   *) echo "Add ${BIN_DIR} to PATH: export PATH=\"${BIN_DIR}:\$PATH\"" ;;

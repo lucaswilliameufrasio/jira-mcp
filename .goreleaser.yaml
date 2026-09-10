@@ -63,7 +63,7 @@ release:
 
     ```powershell
     Invoke-WebRequest https://github.com/lucaswilliameufrasio/jira-mcp/releases/download/{{ .Tag }}/jira-mcp-installer.ps1 -OutFile jira-mcp-installer.ps1
-    .\\jira-mcp-installer.ps1 -Tag {{ .Tag }}
+    .\jira-mcp-installer.ps1 -Tag {{ .Tag }}
     ```
 
     The installers verify the SHA-256 checksum before installing.
