@@ -25,6 +25,8 @@ IMAGE_TAG ?= jira-mcp:local
 RELEASE_IMAGE ?= goreleaser/goreleaser:latest
 PORT ?= 8080
 JIRA_MCP_PUBLIC_URL ?= http://127.0.0.1:$(PORT)
+COVERAGE_PROFILE ?= coverage.out
+COVERAGE_HTML ?= coverage.html
 
 # Benchmark knobs (see internal/remote/benchmark_test.go)
 BENCH_RUNS ?= 5
@@ -36,7 +38,7 @@ ENCRYPTION_KEY ?= $(shell openssl rand -base64 32 | tr -d '=\n')
 .DEFAULT_GOAL := help
 
 .PHONY: help setup setup-tools deps tidy fmt fmt-check lint vet vuln check quality \
-	test-unit test-integration test-e2e test-docs test test-race \
+	test-unit test-integration test-e2e test-docs test test-coverage test-race \
 	infra-up infra-down infra-logs infra-ps \
 	build build-version run-stdio setup-config run-remote \
 	docker-build docker-size docker-run docker-health docker-stop \
@@ -66,6 +68,7 @@ help:
 	@echo "  make test-integration  integration tests against real Valkey (compose)"
 	@echo "  make test-e2e       e2e contract tests (stdio, cloud + data center)"
 	@echo "  make test-docs      build docs-site (pnpm)"
+	@echo "  make test-coverage  unit + integration tests with Go coverage report"
 	@echo "  make test-race      go test -race ./..."
 	@echo ""
 	@echo "  make infra-up       start Valkey (docker compose)"
@@ -147,6 +150,14 @@ test-docs:
 	cd docs-site && pnpm install --frozen-lockfile && pnpm build
 
 test: test-unit test-integration test-e2e test-docs
+
+test-coverage:
+	set -e; trap '$(COMPOSE) down -v' EXIT; \
+	$(COMPOSE) up -d --wait; \
+	VALKEY_URL=$(VALKEY_URL) $(GO) test -tags=integration -covermode=atomic \
+		-coverpkg=./internal/... -coverprofile=$(COVERAGE_PROFILE) -count=1 ./...; \
+	$(GO) tool cover -func=$(COVERAGE_PROFILE); \
+	$(GO) tool cover -html=$(COVERAGE_PROFILE) -o $(COVERAGE_HTML)
 
 test-race:
 	$(GO) test -race -count=1 ./...

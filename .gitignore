@@ -11,6 +11,7 @@ config.json
 # Go tooling
 vendor/
 coverage.out
+coverage.html
 dist/
 
 # OS/editor files
