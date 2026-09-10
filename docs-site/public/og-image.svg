@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <rect width="1200" height="630" fill="#101311"/>
+  <circle cx="1030" cy="-20" r="260" fill="#d8fa5c" opacity="0.08"/>
+  <circle cx="1120" cy="590" r="210" fill="#d8fa5c" opacity="0.06"/>
+  <rect x="96" y="105" width="116" height="116" rx="28" fill="#d8fa5c"/>
+  <path d="M174 131v50c0 18-12 30-26 30-12 0-21-7-24-16l14-6c1 6 6 10 12 9 7-1 10-7 10-16v-51h14z" fill="#11150f"/>
+  <text x="96" y="315" fill="#eff3e9" font-family="Inter, Arial, sans-serif" font-size="76" font-weight="700" letter-spacing="-3">jira-mcp</text>
+  <text x="100" y="390" fill="#a9b1a2" font-family="Inter, Arial, sans-serif" font-size="32">Give your AI a direct line to Jira.</text>
+  <rect x="100" y="480" width="170" height="42" rx="21" fill="#1d251e" stroke="#475441"/>
+  <text x="185" y="508" text-anchor="middle" fill="#d8fa5c" font-family="Arial, sans-serif" font-size="16" font-weight="700">MCP SERVER</text>
+  <text x="300" y="508" fill="#778174" font-family="Arial, sans-serif" font-size="16">Go · Jira Cloud · Data Center · self-hosted</text>
+</svg>
