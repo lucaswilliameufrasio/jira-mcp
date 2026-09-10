@@ -68,8 +68,12 @@ entrypoint fica em `cmd/jira-mcp/main.go`.
 
 ## Deploy
 
-- **Servidor remoto (Railway):** modo `remote` via Streamable HTTP + OAuth
-  Atlassian + Valkey. Guia: [`docs/deployment/railway.md`](docs/deployment/railway.md).
+Não existe instância oficial hospedada — o modo remoto é **self-hosted**: você
+sobe e administra a própria instância, e as credenciais são suas.
+
+- **Servidor remoto self-hosted (ex.: Railway):** modo `remote` via Streamable
+  HTTP + OAuth Atlassian + Valkey. Guia:
+  [`docs/deployment/railway.md`](docs/deployment/railway.md).
 - **Documentação (Cloudflare Pages):** site estático em `docs-site/`.
   Guia: [`docs/deployment/cloudflare-pages.md`](docs/deployment/cloudflare-pages.md).
 

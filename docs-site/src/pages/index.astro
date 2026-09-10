@@ -27,7 +27,7 @@ import "../styles/global.css";
         <div class="hero-copy">
           <p class="eyebrow"><span class="pulse"></span> Open-source MCP server</p>
           <h1>Give your AI a direct line to Jira.</h1>
-          <p class="lede">Search, create, update and move issues from any MCP host. Local stdio for a single developer, remote OAuth for teams.</p>
+          <p class="lede">Search, create, update and move issues from any MCP host. Runs locally over stdio — or self-hosted over HTTP, where you own the infrastructure and the credentials.</p>
           <div class="hero-actions">
             <a class="button primary" href="#quick-start">Get started <span aria-hidden="true">&#8594;</span></a>
             <a class="button secondary" href="https://github.com/lucaswilliameufrasio/jira-mcp">View source</a>
@@ -50,12 +50,12 @@ import "../styles/global.css";
 
       <section class="feature-grid" aria-label="Features">
         <article><span class="icon">01</span><h2>Native MCP</h2><p>Official Go SDK and protocol-level tests. Works with OpenCode and any compatible host.</p></article>
-        <article><span class="icon">02</span><h2>Two deployment modes</h2><p>Stdio for local use. Streamable HTTP with Atlassian OAuth for shared infrastructure.</p></article>
+        <article><span class="icon">02</span><h2>Self-hosted by design</h2><p>Stdio for local use. Need to share an instance with a team? Deploy your own server with Atlassian OAuth — no hosted service, your infrastructure, your credentials.</p></article>
         <article><span class="icon">03</span><h2>Built to be trusted</h2><p>PKCE, encrypted tokens, isolated users, Valkey sessions and contract-tested Jira APIs.</p></article>
       </section>
 
       <section class="quick-start" id="quick-start">
-        <div><p class="eyebrow">01 / Local setup</p><h2>Connect in under a minute.</h2><p>Download a release or build from source, then let the setup wizard create a local configuration with restrictive permissions.</p></div>
+        <div><p class="eyebrow">01 / Local setup</p><h2>Connect in under a minute.</h2><p>Download a release or build from source, then let the setup wizard create a local configuration with restrictive permissions. Want a shared instance? Deploy your own — the repository's <a href="https://github.com/lucaswilliameufrasio/jira-mcp/tree/main/docs/deployment">deployment guides</a> cover self-hosting on Railway or any environment.</p></div>
         <pre><code><span class="comment"># build</span>
 go build -o jira-mcp .
 

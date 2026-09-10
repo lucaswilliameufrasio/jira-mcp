@@ -4,6 +4,11 @@ The remote mode runs the same `jira-mcp` binary as a multi-user Streamable HTTP
 server with Atlassian OAuth. Railway builds it from the repository root
 `Dockerfile` and connects it to a Valkey instance.
 
+This is a self-hosting guide: there is no official hosted service. You operate
+the infrastructure and are responsible for the credentials stored in your
+instance. The same setup works on any environment that runs the Dockerfile and
+provides a Valkey endpoint.
+
 ## Services
 
 1. Create a Railway project with:
