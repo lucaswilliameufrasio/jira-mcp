@@ -109,6 +109,7 @@ make test-unit          # testes unitários
 make test-integration   # fake OAuth/MCP + Valkey 9.1.x real via Docker
 make test-e2e            # binário real via stdio
 make test                # todas as camadas
+jira-mcp doctor          # diagnóstico de config, clientes, tools e MCP stdio
 ```
 
 O E2E stdio usa `JIRA_MCP_BINARY` quando executado diretamente. O teste de
@@ -119,8 +120,22 @@ fakes determinísticos, sem exigir credenciais reais.
 
 O servidor lê tudo de variáveis de ambiente:
 
-Para configuração interativa local, execute `jira-mcp setup`. O arquivo é salvo
-com permissão restrita em `XDG_CONFIG_HOME/jira-mcp/config.json`.
+Para configuração interativa, execute `jira-mcp setup`. O comando salva as
+credenciais com permissão restrita em `XDG_CONFIG_HOME/jira-mcp/config.json`,
+detecta clientes MCP instalados (OpenCode, Claude Code/Desktop, Codex CLI, VS Code e Zed)
+e pergunta em quais configurações adicionar o servidor. Configurações já
+contendo `jira-mcp` aparecem marcadas e ficam selecionadas por padrão. As
+mesmas credenciais são reutilizadas automaticamente; não é necessário digitá-
+las novamente.
+
+Ao executar o setup novamente, pressione Enter para manter os clientes atuais
+ou selecione uma nova lista. Use `none` para remover o `jira-mcp` de todos os
+clientes detectados. Para as tools, pressione Enter para manter as atuais ou
+escolha `add`, `remove` ou `replace` e selecione-as pelos números ou nomes
+exibidos. Todas as configurações selecionadas são atualizadas com essa seleção.
+
+Se nenhum cliente compatível for detectado, o arquivo local ainda é salvo e o
+cliente MCP pode ser configurado manualmente depois.
 
 ### Jira Cloud (padrão)
 

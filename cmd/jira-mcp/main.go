@@ -20,9 +20,12 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
+
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"jira-mcp/internal/config"
 	"jira-mcp/internal/jira"
@@ -37,6 +40,13 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "setup" {
 		if err := config.RunSetup(os.Stdin, os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, "[jira-mcp] setup error:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "doctor" {
+		if err := runDoctor(); err != nil {
+			fmt.Fprintln(os.Stderr, "[jira-mcp] doctor found problems:", err)
 			os.Exit(1)
 		}
 		return
@@ -65,6 +75,49 @@ func main() {
 		fmt.Fprintln(os.Stderr, "[jira-mcp] fatal error:", err)
 		os.Exit(1)
 	}
+}
+
+func runDoctor() error {
+	configErr := config.Doctor(os.Stdout)
+	_, _ = fmt.Fprintln(os.Stdout, "\nMCP stdio")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	command := executablePath()
+	cmd := exec.Command(command)
+	cmd.Stderr = os.Stderr
+	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "jira-mcp-doctor", Version: "1.0.0"}, nil)
+	session, err := client.Connect(ctx, &sdkmcp.CommandTransport{Command: cmd}, nil)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stdout, "  FAIL  %v\n", err)
+		return joinErrors(configErr, err)
+	}
+	defer func() { _ = session.Close() }()
+	listed, err := session.ListTools(ctx, nil)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stdout, "  FAIL  tools/list: %v\n", err)
+		return joinErrors(configErr, err)
+	}
+	_, _ = fmt.Fprintf(os.Stdout, "  OK    stdio handshake; %d tools exposed\n", len(listed.Tools))
+	return configErr
+}
+
+func executablePath() string {
+	path, err := os.Executable()
+	if err == nil {
+		return path
+	}
+	return "jira-mcp"
+}
+
+func joinErrors(first, second error) error {
+	if first == nil {
+		return second
+	}
+	if second == nil {
+		return first
+	}
+	return fmt.Errorf("%v; %w", first, second)
 }
 
 func runRemote() error {
