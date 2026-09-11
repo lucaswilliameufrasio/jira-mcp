@@ -2,7 +2,18 @@
 
 All notable changes to Jira MCP will be documented in this file.
 
+## [0.4.0] - 2026-09-11
+
+### Features
+
+- Improve setup and Jira validation
+
 ## [0.3.0] - 2026-09-10
+
+### Chores
+
+- *(release)* Prepare for v0.3.0 (#4)
+
 
 ### Features
 
