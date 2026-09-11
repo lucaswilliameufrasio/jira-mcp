@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,17 +14,32 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/term"
+
 	"jira-mcp/internal/jira"
+	"jira-mcp/internal/setupui"
 	"jira-mcp/internal/tools"
+	"jira-mcp/pkg/selection"
 )
 
 type File struct {
+	BaseURL             string             `json:"base_url"`
+	Deployment          string             `json:"deployment"`
+	Email               string             `json:"email,omitempty"`
+	APIToken            string             `json:"api_token,omitempty"`
+	PersonalAccessToken string             `json:"personal_access_token,omitempty"`
+	BearerToken         string             `json:"-"`
+	Tools               []string           `json:"tools,omitempty"`
+	ActiveProfile       string             `json:"active_profile,omitempty"`
+	Profiles            map[string]Profile `json:"profiles,omitempty"`
+}
+
+type Profile struct {
 	BaseURL             string   `json:"base_url"`
 	Deployment          string   `json:"deployment"`
 	Email               string   `json:"email,omitempty"`
 	APIToken            string   `json:"api_token,omitempty"`
 	PersonalAccessToken string   `json:"personal_access_token,omitempty"`
-	BearerToken         string   `json:"-"`
 	Tools               []string `json:"tools,omitempty"`
 }
 
@@ -66,6 +82,7 @@ func Resolve() (jira.Config, map[string]bool, error) {
 	if err != nil {
 		return jira.Config{}, nil, fmt.Errorf("configuration not found; run 'jira-mcp setup': %w", err)
 	}
+	file = activeProfileFile(file)
 	cfg, err := toJiraConfig(file)
 	if err != nil {
 		return jira.Config{}, nil, err
@@ -78,7 +95,7 @@ func RunSetup(in io.Reader, out io.Writer) error {
 	file := File{}
 	var err error
 	if existing, loadErr := Load(); loadErr == nil {
-		file = existing
+		file = activeProfileFile(existing)
 	}
 
 	file.BaseURL, err = ask(r, out, "Jira URL", file.BaseURL, true)
@@ -103,17 +120,26 @@ func RunSetup(in io.Reader, out io.Writer) error {
 		return err
 	}
 
-	file.Tools, err = configureTools(r, out, file.Tools, tools.AvailableToolNames())
+	interactive := term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
+	if interactive {
+		file.Tools, err = setupui.SelectTools(r, out, tools.AvailableToolNames(), file.Tools)
+	} else {
+		file.Tools, err = configureTools(r, out, file.Tools, tools.AvailableToolNames())
+	}
 	if err != nil {
 		return err
+	}
+	if interactive {
+		detectBoards(out, file)
 	}
 
-	b, err := json.MarshalIndent(file, "", "  ")
-	if err != nil {
-		return err
-	}
 	path := Path()
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	file = saveProfile(file)
+	b, err := json.MarshalIndent(file, "", "  ")
+	if err != nil {
 		return err
 	}
 	if err := os.WriteFile(path, append(b, '\n'), 0600); err != nil {
@@ -149,7 +175,7 @@ func RunSetup(in io.Reader, out io.Writer) error {
 	if strings.EqualFold(strings.TrimSpace(clientSelection), "none") {
 		selected = nil
 	} else {
-		selected, err = parseSelection(clientSelection, clientChoices)
+		selected, err = selection.Parse(clientSelection, clientChoices)
 		if err != nil {
 			return err
 		}
@@ -219,69 +245,98 @@ func configuredTargetSelection(targets []installTarget) string {
 	return strings.Join(selected, ",")
 }
 
+func activeProfileFile(file File) File {
+	if len(file.Profiles) == 0 {
+		return file
+	}
+	name := strings.TrimSpace(os.Getenv("JIRA_MCP_PROFILE"))
+	if name == "" {
+		name = file.ActiveProfile
+	}
+	if name == "" {
+		for profileName := range file.Profiles {
+			name = profileName
+			break
+		}
+	}
+	profile, ok := file.Profiles[name]
+	if !ok {
+		return file
+	}
+	profile.Tools = append([]string(nil), profile.Tools...)
+	file.BaseURL = profile.BaseURL
+	file.Deployment = profile.Deployment
+	file.Email = profile.Email
+	file.APIToken = profile.APIToken
+	file.PersonalAccessToken = profile.PersonalAccessToken
+	file.Tools = profile.Tools
+	file.ActiveProfile = name
+	return file
+}
+
+func saveProfile(file File) File {
+	if file.Profiles == nil {
+		file.Profiles = make(map[string]Profile)
+	}
+	name := profileName(file.BaseURL)
+	file.ActiveProfile = name
+	file.Profiles[name] = Profile{
+		BaseURL:             file.BaseURL,
+		Deployment:          file.Deployment,
+		Email:               file.Email,
+		APIToken:            file.APIToken,
+		PersonalAccessToken: file.PersonalAccessToken,
+		Tools:               append([]string(nil), file.Tools...),
+	}
+	return file
+}
+
+func profileName(baseURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(baseURL))
+	if err == nil && parsed.Hostname() != "" {
+		return parsed.Hostname()
+	}
+	return "default"
+}
+
+func detectBoards(out io.Writer, file File) {
+	cfg, err := toJiraConfig(file)
+	if err != nil {
+		_, _ = fmt.Fprintf(out, "\nBoards: unable to authenticate (%v)\n", err)
+		return
+	}
+	boards, err := jira.NewClient(cfg).ListBoards("", 200)
+	if err != nil {
+		_, _ = fmt.Fprintf(out, "\nBoards: discovery failed (%v)\n", err)
+		return
+	}
+	_, _ = fmt.Fprintf(out, "\nBoards detected: %d\n", len(boards))
+	for _, board := range boards {
+		_, _ = fmt.Fprintf(out, "  - %d %q (%s, project=%s)\n", board.ID, board.Name, board.Type, board.Location.ProjectKey)
+	}
+}
+
 func configureTools(r *bufio.Reader, out io.Writer, current, choices []string) ([]string, error) {
 	if len(current) == 0 {
 		current = append([]string(nil), choices...)
 	}
-	_, _ = fmt.Fprintf(out, "\nCurrently enabled tools: %s\n", strings.Join(current, ", "))
-	action, err := ask(r, out, "Tool action (keep/add/remove/replace)", "keep", true)
-	if err != nil {
-		return nil, err
-	}
-	action = strings.ToLower(strings.TrimSpace(action))
-	if action == "keep" {
-		return current, nil
-	}
-	if action != "add" && action != "remove" && action != "replace" {
-		return nil, fmt.Errorf("invalid tool action %q; use keep, add, remove, or replace", action)
-	}
-	_, _ = fmt.Fprintln(out, "Available tools (comma-separated numbers or names):")
-	for i, name := range choices {
-		_, _ = fmt.Fprintf(out, "  %d. %s\n", i+1, name)
-	}
-	selection, err := ask(r, out, "Tools", "", true)
-	if err != nil {
-		return nil, err
-	}
-	selected, err := parseSelection(selection, choices)
-	if err != nil {
-		return nil, err
-	}
-	if action == "replace" {
-		return selected, nil
-	}
-	if action == "add" {
-		return mergeTools(current, selected), nil
-	}
-	removed := make(map[string]bool, len(selected))
-	for _, name := range selected {
-		removed[name] = true
-	}
-	remaining := make([]string, 0, len(current))
+	_, _ = fmt.Fprintln(out, "\nTools (selected entries will remain enabled):")
+	selected := make(map[string]bool, len(current))
 	for _, name := range current {
-		if !removed[name] {
-			remaining = append(remaining, name)
+		selected[name] = true
+	}
+	for i, name := range choices {
+		marker := "[ ]"
+		if selected[name] {
+			marker = "[x]"
 		}
+		_, _ = fmt.Fprintf(out, "  %s %d. %s\n", marker, i+1, name)
 	}
-	if len(remaining) == 0 {
-		return nil, errors.New("keep at least one tool enabled")
+	selectionValue, err := ask(r, out, "Enabled tools (numbers/names, or 'all')", strings.Join(current, ","), true)
+	if err != nil {
+		return nil, err
 	}
-	return remaining, nil
-}
-
-func mergeTools(current, selected []string) []string {
-	result := append([]string(nil), current...)
-	seen := make(map[string]bool, len(result))
-	for _, name := range result {
-		seen[name] = true
-	}
-	for _, name := range selected {
-		if !seen[name] {
-			result = append(result, name)
-			seen[name] = true
-		}
-	}
-	return result
+	return selection.Parse(selectionValue, choices)
 }
 
 func detectedInstallTargets() []installTarget {
@@ -577,44 +632,6 @@ func enabledTools(names []string) map[string]bool {
 		return nil
 	}
 	return result
-}
-
-func parseSelection(value string, choices []string) ([]string, error) {
-	value = strings.TrimSpace(value)
-	if value == "all" || value == "" {
-		return append([]string(nil), choices...), nil
-	}
-	index := make(map[string]int, len(choices))
-	for i, name := range choices {
-		index[name] = i
-	}
-	var selected []string
-	seen := map[string]bool{}
-	add := func(name string) {
-		if !seen[name] {
-			selected = append(selected, name)
-			seen[name] = true
-		}
-	}
-	for _, item := range strings.Split(value, ",") {
-		item = strings.TrimSpace(item)
-		if item == "" {
-			continue
-		}
-		if i, ok := index[item]; ok {
-			add(choices[i])
-			continue
-		}
-		n, err := strconv.Atoi(item)
-		if err != nil || n < 1 || n > len(choices) {
-			return nil, fmt.Errorf("invalid tool selection %q", item)
-		}
-		add(choices[n-1])
-	}
-	if len(selected) == 0 {
-		return nil, errors.New("select at least one tool")
-	}
-	return selected, nil
 }
 
 func ask(r *bufio.Reader, out io.Writer, label, current string, required bool) (string, error) {

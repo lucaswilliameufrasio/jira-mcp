@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"jira-mcp/pkg/jsonvalue"
 )
 
 // Deployment selects which flavor of the Jira REST API to talk to.
@@ -234,6 +236,27 @@ type EditMetadata struct {
 	Fields map[string]FieldMetadata `json:"fields"`
 }
 
+type CreateMetadata struct {
+	Projects []CreateMetadataProject `json:"projects"`
+}
+
+type CreateMetadataProject struct {
+	Key        string               `json:"key"`
+	IssueTypes []CreateMetadataType `json:"issuetypes"`
+}
+
+type CreateMetadataType struct {
+	Name   string                   `json:"name"`
+	Fields map[string]FieldMetadata `json:"fields"`
+}
+
+type IssueHierarchy struct {
+	IssueKey  string `json:"issueKey"`
+	ParentKey string `json:"parentKey,omitempty"`
+	EpicKey   string `json:"epicKey,omitempty"`
+	EpicField string `json:"epicField,omitempty"`
+}
+
 type SearchResult struct {
 	// Populated on Jira Server/Data Center (api/2 classic search).
 	StartAt    int `json:"startAt,omitempty"`
@@ -334,6 +357,121 @@ func (c *Client) GetFieldMetadata(issueKey string) (*EditMetadata, error) {
 	return &out, nil
 }
 
+// GetCreateMetadata returns fields allowed for a project and issue type.
+func (c *Client) GetCreateMetadata(projectKey, issueType string) (map[string]FieldMetadata, error) {
+	q := url.Values{}
+	q.Set("projectKeys", projectKey)
+	q.Set("issuetypeNames", issueType)
+	q.Set("expand", "projects.issuetypes.fields")
+	var out CreateMetadata
+	if err := c.doJSON(http.MethodGet, c.apiPath("/issue/createmeta"), q, nil, &out); err != nil {
+		return nil, err
+	}
+	for _, project := range out.Projects {
+		if !strings.EqualFold(project.Key, projectKey) {
+			continue
+		}
+		for _, issueTypeMetadata := range project.IssueTypes {
+			if strings.EqualFold(issueTypeMetadata.Name, issueType) {
+				return issueTypeMetadata.Fields, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("no create metadata found for project %s and issue type %s", projectKey, issueType)
+}
+
+// SetIssueEpic associates an issue with an Epic using the hierarchy mechanism
+// supported by the Jira project: parent first, then the legacy Epic Link field.
+func (c *Client) SetIssueEpic(issueKey, epicKey string) error {
+	if strings.TrimSpace(issueKey) == "" || strings.TrimSpace(epicKey) == "" {
+		return fmt.Errorf("issue key and epic key are required")
+	}
+	epic, err := c.GetIssue(epicKey, []string{"issuetype"}, nil)
+	if err != nil {
+		return fmt.Errorf("verify epic %s: %w", epicKey, err)
+	}
+	if !isEpicType(epic.Fields["issuetype"]) {
+		return fmt.Errorf("issue %s is not an Epic", epicKey)
+	}
+	metadata, err := c.GetFieldMetadata(issueKey)
+	if err != nil {
+		return fmt.Errorf("get editable metadata for %s: %w", issueKey, err)
+	}
+	if field, ok := metadata.Fields["parent"]; ok && supportsSet(field) {
+		return c.UpdateIssue(issueKey, map[string]interface{}{"parent": map[string]string{"key": epicKey}})
+	}
+	for key, field := range metadata.Fields {
+		if strings.Contains(strings.ToLower(field.Name), "epic link") && supportsSet(field) {
+			return c.UpdateIssue(issueKey, map[string]interface{}{key: epicKey})
+		}
+	}
+	return fmt.Errorf("issue %s has no editable parent or Epic Link field", issueKey)
+}
+
+// GetIssueHierarchy returns the parent and Epic relationship currently visible
+// for an issue, supporting both current parent and legacy Epic Link fields.
+func (c *Client) GetIssueHierarchy(issueKey string) (*IssueHierarchy, error) {
+	metadata, err := c.GetFieldMetadata(issueKey)
+	if err != nil {
+		return nil, fmt.Errorf("get editable metadata for %s: %w", issueKey, err)
+	}
+	fields := []string{"parent"}
+	var epicField string
+	for key, field := range metadata.Fields {
+		if strings.Contains(strings.ToLower(field.Name), "epic link") {
+			epicField = key
+			fields = append(fields, key)
+			break
+		}
+	}
+	issue, err := c.GetIssue(issueKey, fields, nil)
+	if err != nil {
+		return nil, fmt.Errorf("get hierarchy for %s: %w", issueKey, err)
+	}
+	hierarchy := &IssueHierarchy{IssueKey: issueKey, EpicField: epicField}
+	hierarchy.ParentKey = issueKeyFromValue(issue.Fields["parent"])
+	if hierarchy.ParentKey != "" {
+		hierarchy.EpicKey = hierarchy.ParentKey
+	} else if epicField != "" {
+		hierarchy.EpicKey = issueKeyFromValue(issue.Fields[epicField])
+	}
+	return hierarchy, nil
+}
+
+func supportsSet(field FieldMetadata) bool {
+	for _, operation := range field.Operations {
+		if operation == "set" {
+			return true
+		}
+	}
+	return false
+}
+
+func isEpicType(value interface{}) bool {
+	return strings.EqualFold(issueFieldName(value), "epic")
+}
+
+func issueFieldName(value interface{}) string {
+	if object, ok := value.(map[string]interface{}); ok {
+		if name, ok := object["name"].(string); ok {
+			return name
+		}
+	}
+	return ""
+}
+
+func issueKeyFromValue(value interface{}) string {
+	if object, ok := value.(map[string]interface{}); ok {
+		if key, ok := object["key"].(string); ok {
+			return key
+		}
+	}
+	if key, ok := value.(string); ok {
+		return key
+	}
+	return ""
+}
+
 // ListIssueLinks returns all links attached to an issue.
 func (c *Client) ListIssueLinks(issueKey string) ([]IssueLink, error) {
 	issue, err := c.GetIssue(issueKey, []string{"issuelinks"}, nil)
@@ -363,6 +501,30 @@ func (c *Client) ListIssueLinkTypes() ([]IssueLinkType, error) {
 		return nil, err
 	}
 	return out.IssueLinkTypes, nil
+}
+
+// ResolveIssueLinkType resolves a link type by its name or inward/outward
+// description against the types enabled in the current Jira instance.
+func (c *Client) ResolveIssueLinkType(value string) (string, error) {
+	types, err := c.ListIssueLinkTypes()
+	if err != nil {
+		return "", err
+	}
+	wanted := strings.ToLower(strings.TrimSpace(value))
+	for _, linkType := range types {
+		if wanted == strings.ToLower(linkType.Name) || wanted == strings.ToLower(linkType.Inward) || wanted == strings.ToLower(linkType.Outward) {
+			return linkType.Name, nil
+		}
+	}
+	return "", fmt.Errorf("issue link type %q is not available; use one of: %s", value, joinIssueLinkTypeNames(types))
+}
+
+func joinIssueLinkTypeNames(types []IssueLinkType) string {
+	names := make([]string, 0, len(types))
+	for _, linkType := range types {
+		names = append(names, linkType.Name)
+	}
+	return strings.Join(names, ", ")
 }
 
 // CreateIssueLink creates a directional link between two issues.
@@ -452,6 +614,61 @@ func (c *Client) CreateIssue(in CreateIssueInput) (*Issue, error) {
 func (c *Client) UpdateIssue(issueKey string, fields map[string]interface{}) error {
 	body := map[string]interface{}{"fields": fields}
 	return c.doJSON(http.MethodPut, c.apiPath("/issue/"+url.PathEscape(issueKey)), nil, body, nil)
+}
+
+// ValidateIssueFields checks update fields against the issue's edit metadata
+// before a mutation is sent to Jira.
+func (c *Client) ValidateIssueFields(issueKey string, fields map[string]interface{}) error {
+	metadata, err := c.GetFieldMetadata(issueKey)
+	if err != nil {
+		return fmt.Errorf("get editable metadata for %s: %w", issueKey, err)
+	}
+	for key, value := range fields {
+		field, ok := metadata.Fields[key]
+		if !ok {
+			return fmt.Errorf("field %s is not editable for %s", key, issueKey)
+		}
+		if !supportsSet(field) {
+			return fmt.Errorf("field %s (%s) does not support update", key, field.Name)
+		}
+		if err := jsonvalue.ValidateSchema(value, field.Schema); err != nil {
+			name := field.Name
+			if name == "" {
+				name = key
+			}
+			return fmt.Errorf("field %s (%s): %w", key, name, err)
+		}
+	}
+	return nil
+}
+
+// ValidateCreateFields checks a create payload against project/type metadata.
+func (c *Client) ValidateCreateFields(projectKey, issueType string, fields map[string]interface{}) error {
+	metadata, err := c.GetCreateMetadata(projectKey, issueType)
+	if err != nil {
+		return fmt.Errorf("get create metadata: %w", err)
+	}
+	for key, field := range metadata {
+		if field.Required {
+			if _, ok := fields[key]; !ok {
+				return fmt.Errorf("required field %s (%s) is missing", key, field.Name)
+			}
+		}
+	}
+	for key, value := range fields {
+		field, ok := metadata[key]
+		if !ok {
+			return fmt.Errorf("field %s is not available for project %s and issue type %s", key, projectKey, issueType)
+		}
+		if err := jsonvalue.ValidateSchema(value, field.Schema); err != nil {
+			name := field.Name
+			if name == "" {
+				name = key
+			}
+			return fmt.Errorf("field %s (%s): %w", key, name, err)
+		}
+	}
+	return nil
 }
 
 // AddComment posts a plain-text comment to an issue.
@@ -556,22 +773,39 @@ func (c *Client) agilePath(suffix string) string {
 }
 
 // ListBoards returns boards visible to the user, optionally filtered by
-// project key. Jira paginates this endpoint at up to 50 per page; this
-// method returns the first page (increase maxResults to raise that cap).
+// project key. It follows Jira's startAt pagination until the requested limit
+// is reached or the server marks the response as the last page.
 func (c *Client) ListBoards(projectKey string, maxResults int) ([]Board, error) {
 	if maxResults <= 0 {
 		maxResults = 50
 	}
-	q := url.Values{}
-	q.Set("maxResults", strconv.Itoa(maxResults))
-	if projectKey != "" {
-		q.Set("projectKeyOrId", projectKey)
+	boards := make([]Board, 0, maxResults)
+	startAt := 0
+	for len(boards) < maxResults {
+		pageSize := maxResults - len(boards)
+		if pageSize > 50 {
+			pageSize = 50
+		}
+		q := url.Values{}
+		q.Set("maxResults", strconv.Itoa(pageSize))
+		q.Set("startAt", strconv.Itoa(startAt))
+		if projectKey != "" {
+			q.Set("projectKeyOrId", projectKey)
+		}
+		var out boardsResponse
+		if err := c.doJSON(http.MethodGet, c.agilePath("/board"), q, nil, &out); err != nil {
+			return nil, err
+		}
+		boards = append(boards, out.Values...)
+		if out.IsLast || len(out.Values) == 0 {
+			break
+		}
+		startAt += len(out.Values)
 	}
-	var out boardsResponse
-	if err := c.doJSON(http.MethodGet, c.agilePath("/board"), q, nil, &out); err != nil {
-		return nil, err
+	if len(boards) > maxResults {
+		boards = boards[:maxResults]
 	}
-	return out.Values, nil
+	return boards, nil
 }
 
 // GetBoard fetches a single board's details by ID.

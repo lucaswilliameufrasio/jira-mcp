@@ -73,6 +73,22 @@ func (f *fakeJira) handle(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if strings.HasSuffix(r.URL.Path, "/issue/createmeta") && r.Method == http.MethodGet {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"projects": []map[string]any{{
+				"key": "TEST",
+				"issuetypes": []map[string]any{{
+					"name": "Task",
+					"fields": map[string]any{
+						"project":   map[string]any{"required": true, "name": "Project", "schema": map[string]any{"type": "project"}},
+						"summary":   map[string]any{"required": true, "name": "Summary", "schema": map[string]any{"type": "string"}},
+						"issuetype": map[string]any{"required": true, "name": "Issue Type", "schema": map[string]any{"type": "issuetype"}},
+					},
+				}},
+			}},
+		})
+		return
+	}
 	if strings.HasSuffix(r.URL.Path, "/issue") && r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/rest/api/") {
 		var in struct {
 			Fields map[string]any `json:"fields"`

@@ -26,6 +26,12 @@ func TestFormatIssueIncludesCustomFields(t *testing.T) {
 
 func TestHandleUpdateIssueAcceptsCustomFields(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_ = json.NewEncoder(w).Encode(jira.EditMetadata{Fields: map[string]jira.FieldMetadata{
+				"customfield_10001": {Name: "Example", Schema: map[string]interface{}{"type": "string"}, Operations: []string{"set"}},
+			}})
+			return
+		}
 		var body map[string]map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatal(err)

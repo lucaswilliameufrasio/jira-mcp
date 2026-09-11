@@ -71,6 +71,42 @@ func Register(s *mcp.Server, client *jira.Client) {
 	}, mcp.TextHandler(handleGetIssue(client)))
 
 	s.RegisterTool(mcp.Tool{
+		Name:        "jira_get_field_metadata",
+		Description: "Busca metadata dos campos editáveis de uma issue, incluindo nome, tipo, obrigatoriedade, operações e valores permitidos dos customfield_*.",
+		InputSchema: mcp.InputSchema{
+			Type: "object",
+			Properties: map[string]interface{}{
+				"issue_key":   map[string]interface{}{"type": "string", "description": "Chave ou ID da issue."},
+				"custom_only": map[string]interface{}{"type": "boolean", "description": "Se true (padrão), retorna apenas campos customfield_*. Use false para incluir campos padrão."},
+			},
+			Required: []string{"issue_key"},
+		},
+	}, mcp.TextHandler(handleGetFieldMetadata(client)))
+
+	s.RegisterTool(mcp.Tool{
+		Name:        "jira_set_issue_epic",
+		Description: "Associa uma issue a um Epic usando parent ou o campo Epic Link legado detectado pela metadata Jira.",
+		InputSchema: mcp.InputSchema{
+			Type: "object",
+			Properties: map[string]interface{}{
+				"issue_key": map[string]interface{}{"type": "string", "description": "Issue que será associada ao Epic."},
+				"epic_key":  map[string]interface{}{"type": "string", "description": "Chave da issue cujo tipo deve ser Epic."},
+			},
+			Required: []string{"issue_key", "epic_key"},
+		},
+	}, mcp.TextHandler(handleSetIssueEpic(client)))
+
+	s.RegisterTool(mcp.Tool{
+		Name:        "jira_get_issue_hierarchy",
+		Description: "Retorna o parent e o Epic atual de uma issue, incluindo o mecanismo usado pela instância Jira.",
+		InputSchema: mcp.InputSchema{
+			Type:       "object",
+			Properties: map[string]interface{}{"issue_key": map[string]interface{}{"type": "string", "description": "Chave ou ID da issue."}},
+			Required:   []string{"issue_key"},
+		},
+	}, mcp.TextHandler(handleGetIssueHierarchy(client)))
+
+	s.RegisterTool(mcp.Tool{
 		Name:        "jira_create_issue",
 		Description: "Cria uma nova issue no Jira.",
 		InputSchema: mcp.InputSchema{
@@ -271,7 +307,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 				},
 				"max_results": map[string]interface{}{
 					"type":        "integer",
-					"description": "Número máximo de boards a retornar (padrão 50).",
+					"description": "Número máximo de boards a retornar após paginação (padrão 50).",
 				},
 			},
 		},
@@ -372,7 +408,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 
 func AvailableToolNames() []string {
 	return []string{
-		"jira_search", "jira_get_issue", "jira_create_issue", "jira_update_issue",
+		"jira_search", "jira_get_issue", "jira_get_field_metadata", "jira_set_issue_epic", "jira_get_issue_hierarchy", "jira_create_issue", "jira_update_issue",
 		"jira_add_comment", "jira_list_transitions", "jira_transition_issue",
 		"jira_list_issue_link_types", "jira_list_issue_links", "jira_create_issue_link",
 		"jira_update_issue_link", "jira_delete_issue_link",
@@ -399,6 +435,11 @@ type getIssueArgs struct {
 type getFieldMetadataArgs struct {
 	IssueKey   string `json:"issue_key"`
 	CustomOnly *bool  `json:"custom_only"`
+}
+
+type issueEpicArgs struct {
+	IssueKey string `json:"issue_key"`
+	EpicKey  string `json:"epic_key"`
 }
 
 type createIssueArgs struct {
@@ -512,6 +553,51 @@ func handleGetFieldMetadata(client *jira.Client) func(json.RawMessage) (string, 
 	}
 }
 
+func handleSetIssueEpic(client *jira.Client) func(json.RawMessage) (string, error) {
+	return func(raw json.RawMessage) (string, error) {
+		var args issueEpicArgs
+		if err := unmarshal(raw, &args); err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(args.IssueKey) == "" || strings.TrimSpace(args.EpicKey) == "" {
+			return "", fmt.Errorf("'issue_key' e 'epic_key' são obrigatórios")
+		}
+		if err := client.SetIssueEpic(args.IssueKey, args.EpicKey); err != nil {
+			return "", friendlyError(err)
+		}
+		return fmt.Sprintf("Issue %s associada ao Epic %s.", args.IssueKey, args.EpicKey), nil
+	}
+}
+
+func handleGetIssueHierarchy(client *jira.Client) func(json.RawMessage) (string, error) {
+	return func(raw json.RawMessage) (string, error) {
+		var args listIssueLinksArgs
+		if err := unmarshal(raw, &args); err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(args.IssueKey) == "" {
+			return "", fmt.Errorf("o parâmetro 'issue_key' é obrigatório")
+		}
+		hierarchy, err := client.GetIssueHierarchy(args.IssueKey)
+		if err != nil {
+			return "", friendlyError(err)
+		}
+		parent := hierarchy.ParentKey
+		if parent == "" {
+			parent = "(nenhum)"
+		}
+		epic := hierarchy.EpicKey
+		if epic == "" {
+			epic = "(nenhum)"
+		}
+		mechanism := hierarchy.EpicField
+		if mechanism == "" {
+			mechanism = "parent"
+		}
+		return fmt.Sprintf("Hierarquia de %s:\n- parent: %s\n- epic: %s\n- mecanismo: %s", args.IssueKey, parent, epic, mechanism), nil
+	}
+}
+
 func handleCreateIssue(client *jira.Client) func(json.RawMessage) (string, error) {
 	return func(raw json.RawMessage) (string, error) {
 		var args createIssueArgs
@@ -520,6 +606,16 @@ func handleCreateIssue(client *jira.Client) func(json.RawMessage) (string, error
 		}
 		if args.ProjectKey == "" || args.IssueType == "" || args.Summary == "" {
 			return "", fmt.Errorf("'project_key', 'issue_type' e 'summary' são obrigatórios")
+		}
+		createFields := make(map[string]interface{}, len(args.ExtraFields)+3)
+		createFields["project"] = map[string]string{"key": args.ProjectKey}
+		createFields["summary"] = args.Summary
+		createFields["issuetype"] = map[string]string{"name": args.IssueType}
+		for key, value := range args.ExtraFields {
+			createFields[key] = value
+		}
+		if err := client.ValidateCreateFields(args.ProjectKey, args.IssueType, createFields); err != nil {
+			return "", friendlyError(err)
 		}
 		issue, err := client.CreateIssue(jira.CreateIssueInput{
 			ProjectKey:  args.ProjectKey,
@@ -553,6 +649,9 @@ func handleUpdateIssue(client *jira.Client) func(json.RawMessage) (string, error
 				return "", fmt.Errorf("custom field inválido %q; use o nome API customfield_*", key)
 			}
 			fields[key] = value
+		}
+		if err := client.ValidateIssueFields(args.IssueKey, fields); err != nil {
+			return "", friendlyError(err)
 		}
 		if err := client.UpdateIssue(args.IssueKey, fields); err != nil {
 			return "", friendlyError(err)
@@ -692,6 +791,11 @@ func handleCreateIssueLink(client *jira.Client) func(json.RawMessage) (string, e
 			return "", fmt.Errorf("'link_type', 'inward_issue' e 'outward_issue' são obrigatórios")
 		}
 		args.LinkType = normalizeLinkType(args.LinkType)
+		resolvedType, err := client.ResolveIssueLinkType(args.LinkType)
+		if err != nil {
+			return "", friendlyError(err)
+		}
+		args.LinkType = resolvedType
 		if err := client.CreateIssueLink(jira.CreateIssueLinkInput{
 			LinkType: args.LinkType, InwardIssue: args.InwardIssue, OutwardIssue: args.OutwardIssue, Comment: args.Comment,
 		}); err != nil {
@@ -715,6 +819,11 @@ func handleUpdateIssueLink(client *jira.Client) func(json.RawMessage) (string, e
 		}
 		if args.LinkType != "" {
 			args.LinkType = normalizeLinkType(args.LinkType)
+			resolvedType, err := client.ResolveIssueLinkType(args.LinkType)
+			if err != nil {
+				return "", friendlyError(err)
+			}
+			args.LinkType = resolvedType
 		}
 		if err := client.UpdateIssueLink(args.LinkID, jira.CreateIssueLinkInput{
 			LinkType: args.LinkType, InwardIssue: args.InwardIssue, OutwardIssue: args.OutwardIssue, Comment: args.Comment,

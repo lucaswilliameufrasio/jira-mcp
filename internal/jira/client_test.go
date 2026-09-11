@@ -144,3 +144,30 @@ func TestGetFieldMetadataServerUsesV2EditMetaEndpoint(t *testing.T) {
 		t.Fatalf("metadata = %#v", metadata)
 	}
 }
+
+func TestListBoardsPaginates(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/rest/agile/1.0/board" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		var response boardsResponse
+		switch r.URL.Query().Get("startAt") {
+		case "0":
+			response = boardsResponse{Values: []Board{{ID: 1, Name: "First"}}, IsLast: false}
+		case "1":
+			response = boardsResponse{Values: []Board{{ID: 2, Name: "Second"}}, IsLast: true}
+		default:
+			t.Fatalf("unexpected startAt = %q", r.URL.Query().Get("startAt"))
+		}
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	boards, err := NewClient(Config{BaseURL: server.URL, Deployment: DeploymentCloud, BearerToken: "token"}).ListBoards("PROJ", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(boards) != 2 || boards[0].ID != 1 || boards[1].ID != 2 {
+		t.Fatalf("boards = %#v", boards)
+	}
+}

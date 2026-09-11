@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"jira-mcp/internal/jira"
+	"jira-mcp/pkg/selection"
 )
 
 func TestToJiraConfigCloudNormalizesURL(t *testing.T) {
@@ -36,31 +37,31 @@ func TestToJiraConfigRejectsMissingCredentials(t *testing.T) {
 
 func TestParseSelectionDeduplicatesAndRejectsInvalidValues(t *testing.T) {
 	choices := []string{"one", "two", "three"}
-	selected, err := parseSelection("2, 1,2", choices)
+	selected, err := selection.Parse("2, 1,2", choices)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Join(selected, ",") != "two,one" {
 		t.Fatalf("selected = %v", selected)
 	}
-	if _, err := parseSelection("0", choices); err == nil {
+	if _, err := selection.Parse("0", choices); err == nil {
 		t.Fatal("expected invalid selection error")
 	}
-	if _, err := parseSelection("four", choices); err == nil {
+	if _, err := selection.Parse("four", choices); err == nil {
 		t.Fatal("expected non-numeric selection error")
 	}
 }
 
 func TestParseSelectionAcceptsNamesAndMixedInput(t *testing.T) {
 	choices := []string{"one", "two", "three"}
-	selected, err := parseSelection("two, one", choices)
+	selected, err := selection.Parse("two, one", choices)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Join(selected, ",") != "two,one" {
 		t.Fatalf("names: selected = %v", selected)
 	}
-	selected, err = parseSelection("1,three", choices)
+	selected, err = selection.Parse("1,three", choices)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +73,7 @@ func TestParseSelectionAcceptsNamesAndMixedInput(t *testing.T) {
 func TestParseSelectionKeepsCurrentSelectionOnEnter(t *testing.T) {
 	current := []string{"two", "three"}
 	joined := strings.Join(current, ",")
-	selected, err := parseSelection(joined, []string{"one", "two", "three", "four"})
+	selected, err := selection.Parse(joined, []string{"one", "two", "three", "four"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +85,7 @@ func TestParseSelectionKeepsCurrentSelectionOnEnter(t *testing.T) {
 func TestRunSetupWritesPrivateConfig(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", root)
-	input := strings.NewReader("https://jira.example\ncloud\nuser@example.com\nsecret\nkeep\n")
+	input := strings.NewReader("https://jira.example\ncloud\nuser@example.com\nsecret\n\n")
 	if err := RunSetup(input, &strings.Builder{}); err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +108,7 @@ func TestRunSetupWritesPrivateConfig(t *testing.T) {
 func TestRunSetupKeepsToolsOnEnter(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", root)
-	seed := File{BaseURL: "https://jira.example", Deployment: "cloud", Email: "old@example.com", APIToken: "old-token", Tools: []string{"two", "one"}}
+	seed := File{BaseURL: "https://jira.example", Deployment: "cloud", Email: "old@example.com", APIToken: "old-token", Tools: []string{"jira_get_issue", "jira_search"}}
 	if err := os.MkdirAll(filepath.Dir(Path()), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +123,7 @@ func TestRunSetupKeepsToolsOnEnter(t *testing.T) {
 	// Re-run editing only the email; pressing Enter echoes the prompt default
 	// (the full joined tool list), which must parse back unchanged.
 	joined := strings.Join(seed.Tools, ",")
-	input := strings.NewReader("https://jira.example\ncloud\nnew@example.com\nnew-token\nkeep\n")
+	input := strings.NewReader("https://jira.example\ncloud\nnew@example.com\nnew-token\n\n")
 	if err := RunSetup(input, &strings.Builder{}); err != nil {
 		t.Fatal(err)
 	}
@@ -138,15 +139,11 @@ func TestRunSetupKeepsToolsOnEnter(t *testing.T) {
 	}
 }
 
-func TestConfigureToolsAddsAndRemovesSelections(t *testing.T) {
+func TestConfigureToolsReplacesSelectionInOnePrompt(t *testing.T) {
 	choices := []string{"one", "two", "three"}
-	added, err := configureTools(bufio.NewReader(strings.NewReader("add\nthree\n")), &strings.Builder{}, []string{"one"}, choices)
-	if err != nil || strings.Join(added, ",") != "one,three" {
-		t.Fatalf("added = %v, err = %v", added, err)
-	}
-	removed, err := configureTools(bufio.NewReader(strings.NewReader("remove\none\n")), &strings.Builder{}, []string{"one", "two"}, choices)
-	if err != nil || strings.Join(removed, ",") != "two" {
-		t.Fatalf("removed = %v, err = %v", removed, err)
+	selected, err := configureTools(bufio.NewReader(strings.NewReader("two,three\n")), &strings.Builder{}, []string{"one", "two"}, choices)
+	if err != nil || strings.Join(selected, ",") != "two,three" {
+		t.Fatalf("selected = %v, err = %v", selected, err)
 	}
 }
 
@@ -161,6 +158,29 @@ func TestResolveReadsToolsFromEnvironment(t *testing.T) {
 	}
 	if !enabled["one"] || !enabled["two"] || len(enabled) != 2 {
 		t.Fatalf("unexpected enabled tools: %v", enabled)
+	}
+}
+
+func TestActiveProfileFileSelectsEnvironmentProfile(t *testing.T) {
+	t.Setenv("JIRA_MCP_PROFILE", "secondary.example")
+	file := File{
+		ActiveProfile: "primary.example",
+		Profiles: map[string]Profile{
+			"primary.example":   {BaseURL: "https://primary.example", Deployment: "cloud", Email: "primary", APIToken: "one", Tools: []string{"jira_search"}},
+			"secondary.example": {BaseURL: "https://secondary.example", Deployment: "cloud", Email: "secondary", APIToken: "two", Tools: []string{"jira_get_issue"}},
+		},
+	}
+	selected := activeProfileFile(file)
+	if selected.BaseURL != "https://secondary.example" || selected.Email != "secondary" || strings.Join(selected.Tools, ",") != "jira_get_issue" {
+		t.Fatalf("selected profile = %+v", selected)
+	}
+}
+
+func TestSaveProfileDerivesNameFromHost(t *testing.T) {
+	file := saveProfile(File{BaseURL: "https://jira.example/", Deployment: "cloud", Tools: []string{"jira_search"}})
+	profile, ok := file.Profiles["jira.example"]
+	if !ok || file.ActiveProfile != "jira.example" || profile.BaseURL != "https://jira.example/" {
+		t.Fatalf("file = %+v", file)
 	}
 }
 

@@ -17,6 +17,8 @@ Landing page e documentação: [docs-site](docs-site/README.md).
 | `jira_search` | Busca issues via JQL |
 | `jira_get_issue` | Detalhes completos de uma issue |
 | `jira_get_field_metadata` | Metadata dos campos editáveis, incluindo custom fields |
+| `jira_set_issue_epic` | Associa uma issue a um Epic usando a hierarquia disponível |
+| `jira_get_issue_hierarchy` | Retorna parent e Epic atuais de uma issue |
 | `jira_create_issue` | Cria uma nova issue |
 | `jira_update_issue` | Atualiza campos de uma issue existente |
 | `jira_add_comment` | Adiciona comentário a uma issue |
@@ -39,6 +41,12 @@ explícito `custom_fields`, por exemplo:
 ```json
 {"issue_key":"PROJ-123","custom_fields":{"customfield_10001":"valor"}}
 ```
+
+`jira_update_issue` consulta `editmeta` antes de alterar a issue e valida se os
+campos existem, aceitam a operação `set` e recebem o tipo JSON esperado. A
+tool retorna o nome legível do campo e o formato esperado quando a validação
+falha. `jira_set_issue_epic` detecta automaticamente `parent` ou o campo legado
+Epic Link; não é necessário informar o ID de um custom field.
 
 ### Sobre boards e anexos
 
@@ -139,9 +147,18 @@ las novamente.
 
 Ao executar o setup novamente, pressione Enter para manter os clientes atuais
 ou selecione uma nova lista. Use `none` para remover o `jira-mcp` de todos os
-clientes detectados. Para as tools, pressione Enter para manter as atuais ou
-escolha `add`, `remove` ou `replace` e selecione-as pelos números ou nomes
-exibidos. Todas as configurações selecionadas são atualizadas com essa seleção.
+clientes detectados. Em um terminal interativo, o setup abre uma TUI: use as
+setas para navegar, `Space` para marcar/desmarcar tools, `a` para selecionar
+todas, `n` para limpar e `Enter` para confirmar a seleção final. Em ambientes
+sem TTY, informe uma lista única de números ou nomes separados por vírgula;
+essa lista substitui o estado atual. O fluxo textual aceita `all` para habilitar
+todas as tools.
+
+As credenciais ficam em perfis locais do `jira-mcp`, em
+`XDG_CONFIG_HOME/jira-mcp/config.json`. O perfil ativo é selecionado
+automaticamente; use `JIRA_MCP_PROFILE` para escolher outro perfil salvo. Os
+boards visíveis são descobertos pela API Agile e a listagem é paginada, sem
+necessidade de cadastrar IDs de board manualmente.
 
 Se nenhum cliente compatível for detectado, o arquivo local ainda é salvo e o
 cliente MCP pode ser configurado manualmente depois.
