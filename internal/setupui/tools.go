@@ -17,6 +17,7 @@ var (
 )
 
 type toolsModel struct {
+	title    string
 	choices  []string
 	selected map[string]bool
 	cursor   int
@@ -26,6 +27,18 @@ type toolsModel struct {
 
 // SelectTools runs the interactive final-state selector for enabled tools.
 func SelectTools(in io.Reader, out io.Writer, choices, current []string) ([]string, error) {
+	result, err := SelectMany(in, out, "Select enabled tools", choices, current)
+	if err != nil {
+		return nil, err
+	}
+	if len(result) == 0 {
+		return nil, errors.New("select at least one tool")
+	}
+	return result, nil
+}
+
+// SelectMany presents a reusable multi-choice selector.
+func SelectMany(in io.Reader, out io.Writer, title string, choices, current []string) ([]string, error) {
 	selected := make(map[string]bool, len(current))
 	if len(current) == 0 {
 		for _, choice := range choices {
@@ -37,7 +50,7 @@ func SelectTools(in io.Reader, out io.Writer, choices, current []string) ([]stri
 		}
 	}
 
-	model := toolsModel{choices: choices, selected: selected}
+	model := toolsModel{title: title, choices: choices, selected: selected}
 	program := tea.NewProgram(model, tea.WithInput(in), tea.WithOutput(out))
 	final, err := program.Run()
 	if err != nil {
@@ -46,9 +59,6 @@ func SelectTools(in io.Reader, out io.Writer, choices, current []string) ([]stri
 	result := final.(toolsModel)
 	if result.canceled {
 		return nil, ErrCanceled
-	}
-	if len(result.result) == 0 {
-		return nil, errors.New("select at least one tool")
 	}
 	return result.result, nil
 }
@@ -95,7 +105,11 @@ func (m toolsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m toolsModel) View() string {
 	var view string
-	view += titleStyle.Render("Select enabled tools") + "\n"
+	title := m.title
+	if title == "" {
+		title = "Select enabled tools"
+	}
+	view += titleStyle.Render(title) + "\n"
 	view += "up/down: move  space: toggle  a: all  n: none  enter: confirm  esc: cancel\n\n"
 	for i, name := range m.choices {
 		marker := "[ ]"

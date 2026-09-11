@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -97,6 +98,21 @@ func RunSetup(in io.Reader, out io.Writer) error {
 	if existing, loadErr := Load(); loadErr == nil {
 		file = activeProfileFile(existing)
 	}
+	interactive := term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
+	if interactive && len(file.Profiles) > 0 {
+		choices := profileChoices(file.Profiles)
+		choices = append(choices, "Create new connection")
+		current := file.ActiveProfile
+		selected, selectErr := setupui.SelectOne(os.Stdin, out, "Select Jira connection", choices, current)
+		if selectErr != nil {
+			return selectErr
+		}
+		if selected == "Create new connection" {
+			file = newProfileFile(file)
+		} else {
+			file = profileFile(file, selected)
+		}
+	}
 
 	file.BaseURL, err = ask(r, out, "Jira URL", file.BaseURL, true)
 	if err != nil {
@@ -120,7 +136,6 @@ func RunSetup(in io.Reader, out io.Writer) error {
 		return err
 	}
 
-	interactive := term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
 	if interactive {
 		// Bubble Tea needs the terminal file itself to enable raw mode. Passing
 		// the buffered reader here leaves escape sequences visible in the UI.
@@ -166,18 +181,25 @@ func RunSetup(in io.Reader, out io.Writer) error {
 		_, _ = fmt.Fprintf(out, "  %d. %s [%s]\n     %s\n", i+1, target.Name, status, target.Path)
 	}
 	defaultTargets := configuredTargetSelection(targets)
-	clientSelection, err := ask(r, out, "Clients to configure (numbers, 'none', or Enter keeps current)", defaultTargets, false)
-	if err != nil {
-		return err
-	}
-	if clientSelection == "" {
-		return nil
-	}
 	var selected []string
-	if strings.EqualFold(strings.TrimSpace(clientSelection), "none") {
-		selected = nil
+	if interactive {
+		selected, err = setupui.SelectMany(os.Stdin, out, "Select MCP clients to configure", clientChoices, configuredTargetNames(targets))
+		if err != nil {
+			return err
+		}
 	} else {
-		selected, err = selection.Parse(clientSelection, clientChoices)
+		clientSelection, askErr := ask(r, out, "Clients to configure (numbers, 'none', or Enter keeps current)", defaultTargets, false)
+		if askErr != nil {
+			return askErr
+		}
+		if clientSelection == "" {
+			return nil
+		}
+		if strings.EqualFold(strings.TrimSpace(clientSelection), "none") {
+			selected = nil
+		} else {
+			selected, err = selection.Parse(clientSelection, clientChoices)
+		}
 		if err != nil {
 			return err
 		}
@@ -247,6 +269,16 @@ func configuredTargetSelection(targets []installTarget) string {
 	return strings.Join(selected, ",")
 }
 
+func configuredTargetNames(targets []installTarget) []string {
+	var selected []string
+	for _, target := range targets {
+		if target.Configured {
+			selected = append(selected, target.Name)
+		}
+	}
+	return selected
+}
+
 func activeProfileFile(file File) File {
 	if len(file.Profiles) == 0 {
 		return file
@@ -273,6 +305,37 @@ func activeProfileFile(file File) File {
 	file.PersonalAccessToken = profile.PersonalAccessToken
 	file.Tools = profile.Tools
 	file.ActiveProfile = name
+	return file
+}
+
+func profileChoices(profiles map[string]Profile) []string {
+	choices := make([]string, 0, len(profiles))
+	for name := range profiles {
+		choices = append(choices, name)
+	}
+	sort.Strings(choices)
+	return choices
+}
+
+func profileFile(file File, name string) File {
+	profile, ok := file.Profiles[name]
+	if !ok {
+		return file
+	}
+	file.BaseURL = profile.BaseURL
+	file.Deployment = profile.Deployment
+	file.Email = profile.Email
+	file.APIToken = profile.APIToken
+	file.PersonalAccessToken = profile.PersonalAccessToken
+	file.Tools = append([]string(nil), profile.Tools...)
+	file.ActiveProfile = name
+	return file
+}
+
+func newProfileFile(file File) File {
+	file = activeProfileFile(file)
+	file.BaseURL = ""
+	file.ActiveProfile = ""
 	return file
 }
 

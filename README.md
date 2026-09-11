@@ -148,17 +148,21 @@ las novamente.
 Ao executar o setup novamente, pressione Enter para manter os clientes atuais
 ou selecione uma nova lista. Use `none` para remover o `jira-mcp` de todos os
 clientes detectados. Em um terminal interativo, o setup abre uma TUI: use as
-setas para navegar, `Space` para marcar/desmarcar tools, `a` para selecionar
-todas, `n` para limpar e `Enter` para confirmar a seleção final. Em ambientes
-sem TTY, informe uma lista única de números ou nomes separados por vírgula;
-essa lista substitui o estado atual. O fluxo textual aceita `all` para habilitar
-todas as tools.
+setas para navegar, `Space` para marcar/desmarcar itens, `a` para selecionar
+todos, `n` para limpar e `Enter` para confirmar. A TUI permite escolher a
+conexão Jira salva, criar uma nova conexão, selecionar tools e selecionar os
+clientes MCP a configurar. Ao criar uma conexão, a URL Jira é obrigatória; ao
+editar uma conexão existente, Enter mantém a URL atual.
+
+Uma conta pode ter várias conexões para URLs Jira diferentes. Cada URL é salva
+como um perfil separado, mesmo quando usa o mesmo email/token. Use
+`JIRA_MCP_PROFILE` para escolher outro perfil salvo. Em ambientes sem TTY, o
+fluxo textual continua disponível e aceita `all` para habilitar todas as tools.
 
 As credenciais ficam em perfis locais do `jira-mcp`, em
-`XDG_CONFIG_HOME/jira-mcp/config.json`. O perfil ativo é selecionado
-automaticamente; use `JIRA_MCP_PROFILE` para escolher outro perfil salvo. Os
-boards visíveis são descobertos pela API Agile e a listagem é paginada, sem
-necessidade de cadastrar IDs de board manualmente.
+`XDG_CONFIG_HOME/jira-mcp/config.json`. Os boards visíveis são descobertos pela
+API Agile e a listagem é paginada, sem necessidade de cadastrar IDs de board
+manualmente.
 
 Se nenhum cliente compatível for detectado, o arquivo local ainda é salvo e o
 cliente MCP pode ser configurado manualmente depois.
