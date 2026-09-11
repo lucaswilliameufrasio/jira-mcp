@@ -122,7 +122,9 @@ func RunSetup(in io.Reader, out io.Writer) error {
 
 	interactive := term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
 	if interactive {
-		file.Tools, err = setupui.SelectTools(r, out, tools.AvailableToolNames(), file.Tools)
+		// Bubble Tea needs the terminal file itself to enable raw mode. Passing
+		// the buffered reader here leaves escape sequences visible in the UI.
+		file.Tools, err = setupui.SelectTools(os.Stdin, out, tools.AvailableToolNames(), file.Tools)
 	} else {
 		file.Tools, err = configureTools(r, out, file.Tools, tools.AvailableToolNames())
 	}
