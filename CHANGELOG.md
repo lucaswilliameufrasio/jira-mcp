@@ -2,11 +2,22 @@
 
 All notable changes to Jira MCP will be documented in this file.
 
+## [0.5.0] - 2026-09-12
+
+### Features
+
+- Add profile and client selectors to setup tui
+
 ## [0.4.1] - 2026-09-11
 
 ### Bug Fixes
 
 - Pass terminal input directly to setup tui
+
+
+### Chores
+
+- *(release)* Prepare for v0.4.1 (#6)
 
 ## [0.4.0] - 2026-09-11
 
