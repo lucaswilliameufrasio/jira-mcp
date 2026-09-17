@@ -129,3 +129,19 @@ func TestHandleUpdateIssueRankRequiresExactlyOneAnchor(t *testing.T) {
 		}
 	}
 }
+
+func TestAvailableToolNamesIncludesIssueRankTools(t *testing.T) {
+	available := AvailableToolNames()
+	for _, want := range []string{"jira_get_issue_rank", "jira_update_issue_rank"} {
+		found := false
+		for _, name := range available {
+			if name == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("available tools do not include %q: %v", want, available)
+		}
+	}
+}

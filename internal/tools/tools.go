@@ -481,7 +481,7 @@ func AvailableToolNames() []string {
 		"jira_add_comment", "jira_get_comment", "jira_list_comments", "jira_update_comment", "jira_list_transitions", "jira_transition_issue",
 		"jira_list_issue_link_types", "jira_list_issue_links", "jira_create_issue_link",
 		"jira_update_issue_link", "jira_delete_issue_link",
-		"jira_list_projects", "jira_assign_issue", "jira_list_boards", "jira_get_board",
+		"jira_list_projects", "jira_assign_issue", "jira_list_boards", "jira_get_board", "jira_get_issue_rank", "jira_update_issue_rank",
 		"jira_list_sprints", "jira_board_issues", "jira_sprint_issues",
 		"jira_list_attachments", "jira_get_attachment",
 	}
