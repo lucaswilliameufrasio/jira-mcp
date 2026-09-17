@@ -2,13 +2,29 @@
 
 All notable changes to Jira MCP will be documented in this file.
 
+## [0.6.1] - 2026-09-17
+
+### Bug Fixes
+
+- Expose issue ranking tools in selection
+
 ## [0.6.0] - 2026-09-17
+
+### Chores
+
+- *(release)* Prepare for v0.6.0
+
 
 ### Features
 
 - Add Jira comment and card ranking tools
 
 ## [0.5.0] - 2026-09-12
+
+### Chores
+
+- *(release)* Prepare for v0.5.0 (#7)
+
 
 ### Features
 
@@ -167,3 +183,4 @@ All notable changes to Jira MCP will be documented in this file.
 ### Testing
 
 - Add unit integration and e2e coverage
+
