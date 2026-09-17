@@ -174,6 +174,48 @@ func Register(s *mcp.Server, client *jira.Client) {
 	}, mcp.TextHandler(handleAddComment(client)))
 
 	s.RegisterTool(mcp.Tool{
+		Name:        "jira_get_comment",
+		Description: "Busca um comentário pelo ID dentro de uma issue.",
+		InputSchema: mcp.InputSchema{
+			Type: "object",
+			Properties: map[string]interface{}{
+				"issue_key":  map[string]interface{}{"type": "string", "description": "Chave ou ID da issue."},
+				"comment_id": map[string]interface{}{"type": "string", "description": "ID do comentário."},
+			},
+			Required: []string{"issue_key", "comment_id"},
+		},
+	}, mcp.TextHandler(handleGetComment(client)))
+
+	s.RegisterTool(mcp.Tool{
+		Name:        "jira_list_comments",
+		Description: "Lista os comentários de uma issue, com paginação opcional.",
+		InputSchema: mcp.InputSchema{
+			Type: "object",
+			Properties: map[string]interface{}{
+				"issue_key":   map[string]interface{}{"type": "string", "description": "Chave ou ID da issue."},
+				"max_results": map[string]interface{}{"type": "integer", "description": "Quantidade máxima de comentários (padrão 50)."},
+				"start_at":    map[string]interface{}{"type": "integer", "description": "Índice inicial da página (padrão 0)."},
+				"order_by":    map[string]interface{}{"type": "string", "description": "Ordenação aceita pelo Jira, por exemplo created ou -created."},
+			},
+			Required: []string{"issue_key"},
+		},
+	}, mcp.TextHandler(handleListComments(client)))
+
+	s.RegisterTool(mcp.Tool{
+		Name:        "jira_update_comment",
+		Description: "Atualiza o texto de um comentário existente.",
+		InputSchema: mcp.InputSchema{
+			Type: "object",
+			Properties: map[string]interface{}{
+				"issue_key":  map[string]interface{}{"type": "string", "description": "Chave ou ID da issue."},
+				"comment_id": map[string]interface{}{"type": "string", "description": "ID do comentário."},
+				"comment":    map[string]interface{}{"type": "string", "description": "Novo texto do comentário."},
+			},
+			Required: []string{"issue_key", "comment_id", "comment"},
+		},
+	}, mcp.TextHandler(handleUpdateComment(client)))
+
+	s.RegisterTool(mcp.Tool{
 		Name:        "jira_list_transitions",
 		Description: "Lista as transições de workflow disponíveis para uma issue no momento (nome, status de destino e ID necessário para executá-la).",
 		InputSchema: mcp.InputSchema{
@@ -326,6 +368,33 @@ func Register(s *mcp.Server, client *jira.Client) {
 	}, mcp.TextHandler(handleGetBoard(client)))
 
 	s.RegisterTool(mcp.Tool{
+		Name:        "jira_get_issue_rank",
+		Description: "Verifica a posição de uma issue na ordem de um board, incluindo o card anterior e o próximo.",
+		InputSchema: mcp.InputSchema{
+			Type: "object",
+			Properties: map[string]interface{}{
+				"board_id":  map[string]interface{}{"type": "integer", "description": "ID numérico do board."},
+				"issue_key": map[string]interface{}{"type": "string", "description": "Chave ou ID da issue."},
+			},
+			Required: []string{"board_id", "issue_key"},
+		},
+	}, mcp.TextHandler(handleGetIssueRank(client)))
+
+	s.RegisterTool(mcp.Tool{
+		Name:        "jira_update_issue_rank",
+		Description: "Move uma issue na ordem do Jira antes ou depois de outra issue.",
+		InputSchema: mcp.InputSchema{
+			Type: "object",
+			Properties: map[string]interface{}{
+				"issue_key":    map[string]interface{}{"type": "string", "description": "Chave ou ID da issue a mover."},
+				"before_issue": map[string]interface{}{"type": "string", "description": "Coloca a issue antes desta issue."},
+				"after_issue":  map[string]interface{}{"type": "string", "description": "Coloca a issue depois desta issue."},
+			},
+			Required: []string{"issue_key"},
+		},
+	}, mcp.TextHandler(handleUpdateIssueRank(client)))
+
+	s.RegisterTool(mcp.Tool{
 		Name:        "jira_list_sprints",
 		Description: "Lista as sprints de um board Scrum (com estado, datas e meta), opcionalmente filtradas por estado.",
 		InputSchema: mcp.InputSchema{
@@ -409,7 +478,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 func AvailableToolNames() []string {
 	return []string{
 		"jira_search", "jira_get_issue", "jira_get_field_metadata", "jira_set_issue_epic", "jira_get_issue_hierarchy", "jira_create_issue", "jira_update_issue",
-		"jira_add_comment", "jira_list_transitions", "jira_transition_issue",
+		"jira_add_comment", "jira_get_comment", "jira_list_comments", "jira_update_comment", "jira_list_transitions", "jira_transition_issue",
 		"jira_list_issue_link_types", "jira_list_issue_links", "jira_create_issue_link",
 		"jira_update_issue_link", "jira_delete_issue_link",
 		"jira_list_projects", "jira_assign_issue", "jira_list_boards", "jira_get_board",
@@ -461,6 +530,19 @@ type addCommentArgs struct {
 	Comment  string `json:"comment"`
 }
 
+type commentArgs struct {
+	IssueKey  string `json:"issue_key"`
+	CommentID string `json:"comment_id"`
+	Comment   string `json:"comment"`
+}
+
+type listCommentsArgs struct {
+	IssueKey   string `json:"issue_key"`
+	MaxResults int    `json:"max_results"`
+	StartAt    int    `json:"start_at"`
+	OrderBy    string `json:"order_by"`
+}
+
 type listTransitionsArgs struct {
 	IssueKey string `json:"issue_key"`
 }
@@ -487,6 +569,13 @@ type issueLinkArgs struct {
 type assignIssueArgs struct {
 	IssueKey string `json:"issue_key"`
 	Assignee string `json:"assignee"`
+}
+
+type issueRankArgs struct {
+	BoardID     int    `json:"board_id"`
+	IssueKey    string `json:"issue_key"`
+	BeforeIssue string `json:"before_issue"`
+	AfterIssue  string `json:"after_issue"`
 }
 
 var defaultIssueFields = []string{"summary", "status", "issuetype", "assignee", "reporter", "priority", "updated"}
@@ -673,6 +762,69 @@ func handleAddComment(client *jira.Client) func(json.RawMessage) (string, error)
 			return "", friendlyError(err)
 		}
 		return fmt.Sprintf("Comentário adicionado à issue %s.", args.IssueKey), nil
+	}
+}
+
+func handleGetComment(client *jira.Client) func(json.RawMessage) (string, error) {
+	return func(raw json.RawMessage) (string, error) {
+		var args commentArgs
+		if err := unmarshal(raw, &args); err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(args.IssueKey) == "" || strings.TrimSpace(args.CommentID) == "" {
+			return "", fmt.Errorf("'issue_key' e 'comment_id' são obrigatórios")
+		}
+		comment, err := client.GetComment(args.IssueKey, args.CommentID)
+		if err != nil {
+			return "", friendlyError(err)
+		}
+		return formatComment(comment), nil
+	}
+}
+
+func handleListComments(client *jira.Client) func(json.RawMessage) (string, error) {
+	return func(raw json.RawMessage) (string, error) {
+		var args listCommentsArgs
+		if err := unmarshal(raw, &args); err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(args.IssueKey) == "" {
+			return "", fmt.Errorf("o parâmetro 'issue_key' é obrigatório")
+		}
+		page, err := client.ListComments(args.IssueKey, args.MaxResults, args.StartAt, args.OrderBy)
+		if err != nil {
+			return "", friendlyError(err)
+		}
+		if len(page.Comments) == 0 {
+			return fmt.Sprintf("Nenhum comentário encontrado na issue %s.", args.IssueKey), nil
+		}
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "Comentários de %s (%d-%d de %d):\n", args.IssueKey, page.StartAt+1, page.StartAt+len(page.Comments), page.Total)
+		for _, comment := range page.Comments {
+			sb.WriteString(formatComment(&comment))
+			sb.WriteString("\n")
+		}
+		if page.StartAt+len(page.Comments) < page.Total {
+			fmt.Fprintf(&sb, "Use start_at=%d para a próxima página.\n", page.StartAt+len(page.Comments))
+		}
+		return strings.TrimSpace(sb.String()), nil
+	}
+}
+
+func handleUpdateComment(client *jira.Client) func(json.RawMessage) (string, error) {
+	return func(raw json.RawMessage) (string, error) {
+		var args commentArgs
+		if err := unmarshal(raw, &args); err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(args.IssueKey) == "" || strings.TrimSpace(args.CommentID) == "" || strings.TrimSpace(args.Comment) == "" {
+			return "", fmt.Errorf("'issue_key', 'comment_id' e 'comment' são obrigatórios")
+		}
+		comment, err := client.UpdateComment(args.IssueKey, args.CommentID, args.Comment)
+		if err != nil {
+			return "", friendlyError(err)
+		}
+		return fmt.Sprintf("Comentário %s atualizado na issue %s.\n%s", comment.ID, args.IssueKey, formatComment(comment)), nil
 	}
 }
 
@@ -974,6 +1126,53 @@ func handleGetBoard(client *jira.Client) func(json.RawMessage) (string, error) {
 	}
 }
 
+func handleGetIssueRank(client *jira.Client) func(json.RawMessage) (string, error) {
+	return func(raw json.RawMessage) (string, error) {
+		var args issueRankArgs
+		if err := unmarshal(raw, &args); err != nil {
+			return "", err
+		}
+		if args.BoardID == 0 || strings.TrimSpace(args.IssueKey) == "" {
+			return "", fmt.Errorf("'board_id' e 'issue_key' são obrigatórios")
+		}
+		rank, err := client.GetIssueRank(args.BoardID, args.IssueKey)
+		if err != nil {
+			return "", friendlyError(err)
+		}
+		previous := rank.PreviousIssue
+		if previous == "" {
+			previous = "(primeiro)"
+		}
+		next := rank.NextIssue
+		if next == "" {
+			next = "(último)"
+		}
+		return fmt.Sprintf("Ranking da issue %s no board %d: posição %d de %d.\n- anterior: %s\n- próximo: %s", rank.IssueKey, rank.BoardID, rank.Position, rank.Total, previous, next), nil
+	}
+}
+
+func handleUpdateIssueRank(client *jira.Client) func(json.RawMessage) (string, error) {
+	return func(raw json.RawMessage) (string, error) {
+		var args issueRankArgs
+		if err := unmarshal(raw, &args); err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(args.IssueKey) == "" {
+			return "", fmt.Errorf("o parâmetro 'issue_key' é obrigatório")
+		}
+		if (strings.TrimSpace(args.BeforeIssue) == "") == (strings.TrimSpace(args.AfterIssue) == "") {
+			return "", fmt.Errorf("informe exatamente um entre 'before_issue' e 'after_issue'")
+		}
+		if err := client.UpdateIssueRank(args.IssueKey, args.BeforeIssue, args.AfterIssue); err != nil {
+			return "", friendlyError(err)
+		}
+		if args.BeforeIssue != "" {
+			return fmt.Sprintf("Issue %s movida antes de %s.", args.IssueKey, args.BeforeIssue), nil
+		}
+		return fmt.Sprintf("Issue %s movida depois de %s.", args.IssueKey, args.AfterIssue), nil
+	}
+}
+
 func handleListSprints(client *jira.Client) func(json.RawMessage) (string, error) {
 	return func(raw json.RawMessage) (string, error) {
 		var args listSprintsArgs
@@ -1216,6 +1415,20 @@ func fieldString(fields map[string]interface{}, key string) string {
 		}
 	}
 	return ""
+}
+
+func formatComment(comment *jira.Comment) string {
+	author := comment.Author.DisplayName
+	if author == "" {
+		author = comment.Author.Name
+	}
+	if author == "" {
+		author = comment.Author.AccountID
+	}
+	if author == "" {
+		author = "(desconhecido)"
+	}
+	return fmt.Sprintf("- id=%s autor=%s criado=%s atualizado=%s\n  %s\n", comment.ID, author, comment.Created, comment.Updated, extractPlainText(comment.Body))
 }
 
 func formatIssue(issue *jira.Issue) string {

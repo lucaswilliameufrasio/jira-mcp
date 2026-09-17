@@ -92,3 +92,40 @@ func TestHandleGetFieldMetadataCanIncludeStandardFields(t *testing.T) {
 		t.Fatalf("result = %q", got)
 	}
 }
+
+func TestCommentHandlersFormatAndUpdateComments(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rest/api/3/issue/TEST-1/comment/7" && r.Method == http.MethodGet {
+			_ = json.NewEncoder(w).Encode(jira.Comment{ID: "7", Body: map[string]any{"type": "doc", "content": []any{map[string]any{"type": "paragraph", "content": []any{map[string]any{"text": "hello"}}}}}, Author: jira.CommentUser{DisplayName: "Ana"}})
+			return
+		}
+		if r.URL.Path == "/rest/api/3/issue/TEST-1/comment/7" && r.Method == http.MethodPut {
+			_ = json.NewEncoder(w).Encode(jira.Comment{ID: "7", Body: "changed"})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	client := jira.NewClient(jira.Config{BaseURL: server.URL, Deployment: jira.DeploymentCloud, BearerToken: "token"})
+	got, err := handleGetComment(client)(json.RawMessage(`{"issue_key":"TEST-1","comment_id":"7"}`))
+	if err != nil || !strings.Contains(got, "hello") || !strings.Contains(got, "Ana") {
+		t.Fatalf("get result = %q, err = %v", got, err)
+	}
+	got, err = handleUpdateComment(client)(json.RawMessage(`{"issue_key":"TEST-1","comment_id":"7","comment":"changed"}`))
+	if err != nil || !strings.Contains(got, "atualizado") {
+		t.Fatalf("update result = %q, err = %v", got, err)
+	}
+}
+
+func TestHandleUpdateIssueRankRequiresExactlyOneAnchor(t *testing.T) {
+	client := jira.NewClient(jira.Config{BaseURL: "http://unused", Deployment: jira.DeploymentCloud, BearerToken: "token"})
+	for _, raw := range []string{
+		`{"issue_key":"TEST-1"}`,
+		`{"issue_key":"TEST-1","before_issue":"TEST-2","after_issue":"TEST-3"}`,
+	} {
+		if _, err := handleUpdateIssueRank(client)(json.RawMessage(raw)); err == nil {
+			t.Fatalf("expected validation error for %s", raw)
+		}
+	}
+}

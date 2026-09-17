@@ -22,12 +22,17 @@ Landing page e documentação: [docs-site](docs-site/README.md).
 | `jira_create_issue` | Cria uma nova issue |
 | `jira_update_issue` | Atualiza campos de uma issue existente |
 | `jira_add_comment` | Adiciona comentário a uma issue |
+| `jira_get_comment` | Busca comentário por ID dentro de uma issue |
+| `jira_list_comments` | Lista comentários de uma issue |
+| `jira_update_comment` | Atualiza comentário existente |
 | `jira_list_transitions` | Lista transições de workflow disponíveis |
 | `jira_transition_issue` | Move a issue no workflow (por ID ou nome) |
 | `jira_list_projects` | Lista projetos visíveis |
 | `jira_assign_issue` | Atribui/remove atribuição de uma issue |
 | `jira_list_boards` | Lista boards Scrum/Kanban (Jira Software) |
 | `jira_get_board` | Detalhes de um board |
+| `jira_get_issue_rank` | Verifica a posição de uma issue no board |
+| `jira_update_issue_rank` | Move uma issue antes ou depois de outra |
 | `jira_list_sprints` | Lista sprints de um board |
 | `jira_board_issues` | Issues de um board |
 | `jira_sprint_issues` | Issues de uma sprint |
@@ -53,6 +58,9 @@ Epic Link; não é necessário informar o ID de um custom field.
 - **Boards/sprints** usam uma API separada do Jira (`/rest/agile/1.0`), diferente
   da API núcleo usada pelas demais tools. Precisa do Jira Software habilitado
   no projeto para existir um board.
+- **Ranking**: `jira_get_issue_rank` retorna a posição do card na ordem paginada
+  do board e seus vizinhos. `jira_update_issue_rank` move o card antes ou depois
+  de outro card; o Jira não expõe um valor LexoRank portátil para leitura.
 - **Anexos**: o protocolo MCP só tem um tipo de conteúdo binário embutível —
   **imagem** (base64). Não existe um bloco nativo de "vídeo". Então:
   - Imagens (`png`, `jpeg`, `gif`, `webp`) até 15&nbsp;MB são devolvidas

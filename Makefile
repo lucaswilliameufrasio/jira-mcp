@@ -14,8 +14,9 @@ GOLANGCI_LINT ?= golangci-lint
 endif
 DOCKER ?= docker
 GIT_CLIFF ?= git-cliff
-COMPOSE := $(DOCKER) compose -f docker-compose.test.yml
-VALKEY_URL ?= redis://127.0.0.1:6379
+VALKEY_PORT ?= 6379
+VALKEY_URL ?= redis://127.0.0.1:$(VALKEY_PORT)
+COMPOSE := VALKEY_PORT=$(VALKEY_PORT) $(DOCKER) compose -f docker-compose.test.yml
 VALKEY_URL_DOCKER ?= redis://host.docker.internal:6379
 
 # Build/publish knobs

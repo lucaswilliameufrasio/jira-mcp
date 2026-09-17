@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -142,6 +144,114 @@ func TestGetFieldMetadataServerUsesV2EditMetaEndpoint(t *testing.T) {
 	}
 	if metadata.Fields["customfield_10073"].Name != "Acceptance criteria" {
 		t.Fatalf("metadata = %#v", metadata)
+	}
+}
+
+func TestCommentOperationsUseIssueCommentEndpoints(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/rest/api/3/issue/TEST-1/comment/99" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		if r.Method == http.MethodPut {
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := body["body"].(map[string]any); !ok {
+				t.Fatalf("body = %#v", body)
+			}
+		}
+		_ = json.NewEncoder(w).Encode(Comment{ID: "99", Body: "updated"})
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{BaseURL: server.URL, Deployment: DeploymentCloud, BearerToken: "token"})
+	comment, err := client.GetComment("TEST-1", "99")
+	if err != nil || comment.ID != "99" {
+		t.Fatalf("get comment = %#v, err = %v", comment, err)
+	}
+	comment, err = client.UpdateComment("TEST-1", "99", "updated")
+	if err != nil || comment.ID != "99" {
+		t.Fatalf("update comment = %#v, err = %v", comment, err)
+	}
+}
+
+func TestListCommentsSendsPagination(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/rest/api/2/issue/TEST-1/comment" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.URL.Query().Get("startAt") != "10" || r.URL.Query().Get("maxResults") != "5" || r.URL.Query().Get("orderBy") != "-created" {
+			t.Fatalf("query = %s", r.URL.RawQuery)
+		}
+		_ = json.NewEncoder(w).Encode(CommentsPage{StartAt: 10, MaxResults: 5, Total: 11})
+	}))
+	defer server.Close()
+
+	page, err := NewClient(Config{BaseURL: server.URL, Deployment: DeploymentServer, PersonalAccessToken: "token"}).ListComments("TEST-1", 5, 10, "-created")
+	if err != nil || page.StartAt != 10 || page.Total != 11 {
+		t.Fatalf("page = %#v, err = %v", page, err)
+	}
+}
+
+func TestGetIssueRankPaginatesAndReturnsNeighbors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		startAt := r.URL.Query().Get("startAt")
+		if startAt == "0" {
+			issues := make([]Issue, 50)
+			for i := range issues {
+				issues[i].Key = "TEST-" + strconv.Itoa(i+1)
+			}
+			_ = json.NewEncoder(w).Encode(SearchResult{Total: 51, Issues: issues})
+			return
+		}
+		if startAt != "50" {
+			t.Fatalf("startAt = %q", startAt)
+		}
+		_ = json.NewEncoder(w).Encode(SearchResult{Total: 51, Issues: []Issue{{Key: "TEST-51"}}})
+	}))
+	defer server.Close()
+
+	rank, err := NewClient(Config{BaseURL: server.URL, Deployment: DeploymentCloud, BearerToken: "token"}).GetIssueRank(42, "TEST-51")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rank.Position != 51 || rank.Total != 51 || rank.PreviousIssue != "TEST-50" || rank.NextIssue != "" {
+		t.Fatalf("rank = %+v", rank)
+	}
+}
+
+func TestUpdateIssueRankUsesRelativeAnchor(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/rest/agile/1.0/issue/rank" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["rankBeforeIssue"] != "TEST-2" {
+			t.Fatalf("body = %#v", body)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	if err := NewClient(Config{BaseURL: server.URL, Deployment: DeploymentCloud, BearerToken: "token"}).UpdateIssueRank("TEST-1", "TEST-2", ""); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUpdateIssueRankRejectsPartialFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusMultiStatus)
+		_, _ = w.Write([]byte(`{"issues":[{"issueId":"10001","errors":["rank failed"]}]}`))
+	}))
+	defer server.Close()
+
+	err := NewClient(Config{BaseURL: server.URL, Deployment: DeploymentCloud, BearerToken: "token"}).UpdateIssueRank("TEST-1", "TEST-2", "")
+	if err == nil || !strings.Contains(err.Error(), "partial failure") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

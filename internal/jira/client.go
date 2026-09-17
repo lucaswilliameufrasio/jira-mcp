@@ -1,6 +1,6 @@
 // Package jira is a small REST client for Atlassian Jira, covering the
 // operations exposed as MCP tools: searching, reading, creating, updating,
-// transitioning and commenting on issues, plus listing projects.
+// transitioning, commenting and ranking issues, plus listing projects.
 //
 // It supports both Jira Cloud (api/3, Basic auth with email + API token) and
 // Jira Server/Data Center (api/2, Bearer auth with a Personal Access Token).
@@ -89,8 +89,13 @@ func (e *APIError) Error() string {
 // doJSON issues an HTTP request with an optional JSON body and decodes a
 // JSON response into out (if out is non-nil and the response has a body).
 func (c *Client) doJSON(method, path string, query url.Values, body interface{}, out interface{}) error {
+	_, err := c.doJSONStatus(method, path, query, body, out)
+	return err
+}
+
+func (c *Client) doJSONStatus(method, path string, query url.Values, body interface{}, out interface{}) (int, error) {
 	if c.cfg.BaseURL == "" {
-		return fmt.Errorf("jira base URL is not configured (set JIRA_BASE_URL)")
+		return 0, fmt.Errorf("jira base URL is not configured (set JIRA_BASE_URL)")
 	}
 
 	full := c.cfg.BaseURL + path
@@ -102,44 +107,44 @@ func (c *Client) doJSON(method, path string, query url.Values, body interface{},
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
-			return fmt.Errorf("encoding request body: %w", err)
+			return 0, fmt.Errorf("encoding request body: %w", err)
 		}
 		reader = bytes.NewReader(b)
 	}
 
 	req, err := http.NewRequest(method, full, reader)
 	if err != nil {
-		return fmt.Errorf("building request: %w", err)
+		return 0, fmt.Errorf("building request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
 	if reader != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if err := c.authenticate(req); err != nil {
-		return err
+		return 0, err
 	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("calling jira: %w", err)
+		return 0, fmt.Errorf("calling jira: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("reading jira response: %w", err)
+		return 0, fmt.Errorf("reading jira response: %w", err)
 	}
 
 	if resp.StatusCode >= 300 {
-		return &APIError{StatusCode: resp.StatusCode, Body: string(respBody)}
+		return resp.StatusCode, &APIError{StatusCode: resp.StatusCode, Body: string(respBody)}
 	}
 
 	if out != nil && len(respBody) > 0 {
 		if err := json.Unmarshal(respBody, out); err != nil {
-			return fmt.Errorf("decoding jira response: %w", err)
+			return resp.StatusCode, fmt.Errorf("decoding jira response: %w", err)
 		}
 	}
-	return nil
+	return resp.StatusCode, nil
 }
 
 func (c *Client) authenticate(req *http.Request) error {
@@ -282,6 +287,38 @@ type Transition struct {
 	To   struct {
 		Name string `json:"name"`
 	} `json:"to"`
+}
+
+type Comment struct {
+	ID           string      `json:"id"`
+	Self         string      `json:"self,omitempty"`
+	Body         interface{} `json:"body"`
+	Created      string      `json:"created,omitempty"`
+	Updated      string      `json:"updated,omitempty"`
+	Author       CommentUser `json:"author,omitempty"`
+	UpdateAuthor CommentUser `json:"updateAuthor,omitempty"`
+}
+
+type CommentUser struct {
+	DisplayName string `json:"displayName,omitempty"`
+	AccountID   string `json:"accountId,omitempty"`
+	Name        string `json:"name,omitempty"`
+}
+
+type CommentsPage struct {
+	Comments   []Comment `json:"comments"`
+	StartAt    int       `json:"startAt,omitempty"`
+	MaxResults int       `json:"maxResults,omitempty"`
+	Total      int       `json:"total,omitempty"`
+}
+
+type RankResult struct {
+	BoardID       int
+	IssueKey      string
+	Position      int
+	Total         int
+	PreviousIssue string
+	NextIssue     string
 }
 
 type transitionsResponse struct {
@@ -677,6 +714,49 @@ func (c *Client) AddComment(issueKey, comment string) error {
 	return c.doJSON(http.MethodPost, c.apiPath("/issue/"+url.PathEscape(issueKey)+"/comment"), nil, body, nil)
 }
 
+// GetComment fetches a comment by issue key and comment ID.
+func (c *Client) GetComment(issueKey, commentID string) (*Comment, error) {
+	var out Comment
+	path := c.apiPath("/issue/" + url.PathEscape(issueKey) + "/comment/" + url.PathEscape(commentID))
+	if err := c.doJSON(http.MethodGet, path, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ListComments returns one page of comments for an issue.
+func (c *Client) ListComments(issueKey string, maxResults, startAt int, orderBy string) (*CommentsPage, error) {
+	if maxResults <= 0 {
+		maxResults = 50
+	}
+	if startAt < 0 {
+		startAt = 0
+	}
+	q := url.Values{}
+	q.Set("maxResults", strconv.Itoa(maxResults))
+	q.Set("startAt", strconv.Itoa(startAt))
+	if orderBy != "" {
+		q.Set("orderBy", orderBy)
+	}
+	var out CommentsPage
+	path := c.apiPath("/issue/" + url.PathEscape(issueKey) + "/comment")
+	if err := c.doJSON(http.MethodGet, path, q, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// UpdateComment replaces the body of an existing comment.
+func (c *Client) UpdateComment(issueKey, commentID, comment string) (*Comment, error) {
+	body := map[string]interface{}{"body": c.encodeDescription(comment)}
+	var out Comment
+	path := c.apiPath("/issue/" + url.PathEscape(issueKey) + "/comment/" + url.PathEscape(commentID))
+	if err := c.doJSON(http.MethodPut, path, nil, body, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // ListTransitions returns the workflow transitions currently available for
 // an issue (the "to" status names and the IDs needed to perform them).
 func (c *Client) ListTransitions(issueKey string) ([]Transition, error) {
@@ -724,6 +804,75 @@ func (c *Client) AssignIssue(issueKey, assignee string) error {
 		body = map[string]interface{}{"accountId": assignee}
 	}
 	return c.doJSON(http.MethodPut, c.apiPath("/issue/"+url.PathEscape(issueKey)+"/assignee"), nil, body, nil)
+}
+
+// GetIssueRank returns an issue's one-based position in the ordered issues of
+// a board. Jira does not expose a portable raw LexoRank value through Agile.
+func (c *Client) GetIssueRank(boardID int, issueKey string) (*RankResult, error) {
+	const pageSize = 50
+	previousKey := ""
+	var found *RankResult
+	for startAt := 0; ; startAt += pageSize {
+		q := url.Values{}
+		q.Set("maxResults", strconv.Itoa(pageSize))
+		q.Set("startAt", strconv.Itoa(startAt))
+		var page SearchResult
+		path := c.agilePath("/board/" + strconv.Itoa(boardID) + "/issue")
+		if err := c.doJSON(http.MethodGet, path, q, nil, &page); err != nil {
+			return nil, err
+		}
+		if found != nil {
+			if len(page.Issues) > 0 {
+				found.NextIssue = page.Issues[0].Key
+			}
+			return found, nil
+		}
+		for i, issue := range page.Issues {
+			if strings.EqualFold(issue.Key, issueKey) || issue.ID == issueKey {
+				result := &RankResult{BoardID: boardID, IssueKey: issue.Key, Position: startAt + i + 1, Total: page.Total}
+				if i > 0 {
+					result.PreviousIssue = page.Issues[i-1].Key
+				} else {
+					result.PreviousIssue = previousKey
+				}
+				if i+1 < len(page.Issues) {
+					result.NextIssue = page.Issues[i+1].Key
+					return result, nil
+				}
+				found = result
+				break
+			}
+		}
+		if len(page.Issues) > 0 {
+			previousKey = page.Issues[len(page.Issues)-1].Key
+		}
+		if len(page.Issues) == 0 || len(page.Issues) < pageSize || (page.Total > 0 && startAt+len(page.Issues) >= page.Total) {
+			break
+		}
+	}
+	if found != nil {
+		return found, nil
+	}
+	return nil, fmt.Errorf("issue %s não encontrada no board %d", issueKey, boardID)
+}
+
+// UpdateIssueRank moves one issue before or after another issue in Jira Agile.
+func (c *Client) UpdateIssueRank(issueKey, beforeIssue, afterIssue string) error {
+	body := map[string]interface{}{"issues": []string{issueKey}}
+	if beforeIssue != "" {
+		body["rankBeforeIssue"] = beforeIssue
+	}
+	if afterIssue != "" {
+		body["rankAfterIssue"] = afterIssue
+	}
+	status, err := c.doJSONStatus(http.MethodPut, c.agilePath("/issue/rank"), nil, body, nil)
+	if err != nil {
+		return err
+	}
+	if status == http.StatusMultiStatus {
+		return fmt.Errorf("jira rank operation returned HTTP %d: partial failure", status)
+	}
+	return nil
 }
 
 // --- Agile (boards & sprints) ---
