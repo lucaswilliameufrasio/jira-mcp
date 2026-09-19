@@ -153,7 +153,7 @@ func TestResolveCreateMetadataCloudUsesProjectScopedEndpoints(t *testing.T) {
 		case "/rest/api/3/project/ECS":
 			_ = json.NewEncoder(w).Encode(Project{ID: "10042", Key: "ECS"})
 		case "/rest/api/3/issue/createmeta/10042/issuetypes":
-			if r.URL.Query().Get("maxResults") != "1000" {
+			if r.URL.Query().Get("maxResults") != "200" {
 				t.Fatalf("maxResults = %q", r.URL.Query().Get("maxResults"))
 			}
 			_ = json.NewEncoder(w).Encode(CreateMetadataIssueTypesPage{

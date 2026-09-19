@@ -463,7 +463,7 @@ func (c *Client) ResolveCreateMetadata(projectKey, issueType string) (*CreateMet
 	for startAt := 0; ; {
 		q := url.Values{}
 		q.Set("startAt", strconv.Itoa(startAt))
-		q.Set("maxResults", "1000")
+		q.Set("maxResults", "200")
 		var page CreateMetadataIssueTypesPage
 		path := c.apiPath("/issue/createmeta/" + url.PathEscape(project.ID) + "/issuetypes")
 		if err := c.doJSON(http.MethodGet, path, q, nil, &page); err != nil {
@@ -489,7 +489,7 @@ func (c *Client) ResolveCreateMetadata(projectKey, issueType string) (*CreateMet
 	for startAt := 0; ; {
 		q := url.Values{}
 		q.Set("startAt", strconv.Itoa(startAt))
-		q.Set("maxResults", "1000")
+		q.Set("maxResults", "200")
 		var page CreateMetadataFieldsPage
 		path := c.apiPath("/issue/createmeta/" + url.PathEscape(project.ID) + "/issuetypes/" + url.PathEscape(issueTypeMetadata.ID))
 		if err := c.doJSON(http.MethodGet, path, q, nil, &page); err != nil {
