@@ -147,6 +147,76 @@ func TestGetFieldMetadataServerUsesV2EditMetaEndpoint(t *testing.T) {
 	}
 }
 
+func TestResolveCreateMetadataCloudUsesProjectScopedEndpoints(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/rest/api/3/project/ECS":
+			_ = json.NewEncoder(w).Encode(Project{ID: "10042", Key: "ECS"})
+		case "/rest/api/3/issue/createmeta/10042/issuetypes":
+			if r.URL.Query().Get("maxResults") != "1000" {
+				t.Fatalf("maxResults = %q", r.URL.Query().Get("maxResults"))
+			}
+			_ = json.NewEncoder(w).Encode(CreateMetadataIssueTypesPage{
+				IssueTypes: []CreateMetadataType{{ID: "10001", Name: "História"}},
+				StartAt:    0,
+				Total:      1,
+			})
+		case "/rest/api/3/issue/createmeta/10042/issuetypes/10001":
+			_ = json.NewEncoder(w).Encode(CreateMetadataFieldsPage{
+				Fields: []FieldMetadata{
+					{FieldID: "summary", Key: "summary", Required: true},
+					{FieldID: "parent", Key: "parent"},
+				},
+				Total: 2,
+			})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	resolution, err := NewClient(Config{BaseURL: server.URL, Deployment: DeploymentCloud, BearerToken: "token"}).ResolveCreateMetadata("ECS", "história")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolution.ProjectID != "10042" || resolution.IssueTypeID != "10001" {
+		t.Fatalf("resolution = %+v", resolution)
+	}
+	if _, ok := resolution.Fields["parent"]; !ok {
+		t.Fatalf("fields = %#v", resolution.Fields)
+	}
+}
+
+func TestCreateIssueUsesResolvedIDs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/rest/api/3/issue" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		fields, ok := body["fields"].(map[string]any)
+		if !ok {
+			t.Fatalf("fields = %#v", body["fields"])
+		}
+		project, _ := fields["project"].(map[string]any)
+		issueType, _ := fields["issuetype"].(map[string]any)
+		if project["id"] != "10042" || issueType["id"] != "10001" {
+			t.Fatalf("fields = %#v", fields)
+		}
+		_ = json.NewEncoder(w).Encode(Issue{ID: "1", Key: "ECS-1"})
+	}))
+	defer server.Close()
+
+	issue, err := NewClient(Config{BaseURL: server.URL, Deployment: DeploymentCloud, BearerToken: "token"}).CreateIssue(CreateIssueInput{
+		ProjectKey: "ECS", ProjectID: "10042", IssueType: "História", IssueTypeID: "10001", Summary: "summary",
+	})
+	if err != nil || issue.Key != "ECS-1" {
+		t.Fatalf("issue = %#v, err = %v", issue, err)
+	}
+}
+
 func TestCommentOperationsUseIssueCommentEndpoints(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/rest/api/3/issue/TEST-1/comment/99" {

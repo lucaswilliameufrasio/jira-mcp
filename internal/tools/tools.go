@@ -696,19 +696,45 @@ func handleCreateIssue(client *jira.Client) func(json.RawMessage) (string, error
 		if args.ProjectKey == "" || args.IssueType == "" || args.Summary == "" {
 			return "", fmt.Errorf("'project_key', 'issue_type' e 'summary' são obrigatórios")
 		}
+		var projectID, issueTypeID string
+		var metadata map[string]jira.FieldMetadata
+		if client.Deployment() != jira.DeploymentServer {
+			resolution, err := client.ResolveCreateMetadata(args.ProjectKey, args.IssueType)
+			if err != nil {
+				return "", friendlyError(err)
+			}
+			projectID = resolution.ProjectID
+			issueTypeID = resolution.IssueTypeID
+			metadata = resolution.Fields
+		}
 		createFields := make(map[string]interface{}, len(args.ExtraFields)+3)
 		createFields["project"] = map[string]string{"key": args.ProjectKey}
 		createFields["summary"] = args.Summary
 		createFields["issuetype"] = map[string]string{"name": args.IssueType}
+		if projectID != "" {
+			createFields["project"] = map[string]string{"id": projectID}
+		}
+		if issueTypeID != "" {
+			createFields["issuetype"] = map[string]string{"id": issueTypeID}
+		}
 		for key, value := range args.ExtraFields {
 			createFields[key] = value
 		}
-		if err := client.ValidateCreateFields(args.ProjectKey, args.IssueType, createFields); err != nil {
+		if metadata == nil {
+			var err error
+			metadata, err = client.GetCreateMetadata(args.ProjectKey, args.IssueType)
+			if err != nil {
+				return "", friendlyError(fmt.Errorf("get create metadata: %w", err))
+			}
+		}
+		if err := client.ValidateCreateFieldsAgainstMetadata(args.ProjectKey, args.IssueType, metadata, createFields); err != nil {
 			return "", friendlyError(err)
 		}
 		issue, err := client.CreateIssue(jira.CreateIssueInput{
 			ProjectKey:  args.ProjectKey,
+			ProjectID:   projectID,
 			IssueType:   args.IssueType,
+			IssueTypeID: issueTypeID,
 			Summary:     args.Summary,
 			Description: args.Description,
 			ExtraFields: args.ExtraFields,
