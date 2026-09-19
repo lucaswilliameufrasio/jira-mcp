@@ -3,17 +3,59 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+func TestBinaryVersionExitsImmediately(t *testing.T) {
+	binary := os.Getenv("JIRA_MCP_BINARY")
+	if binary == "" {
+		t.Skip("JIRA_MCP_BINARY is required for e2e tests")
+	}
+
+	cmd := exec.Command(binary, "--version")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdin.Close()
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if cmd.ProcessState == nil || !cmd.ProcessState.Exited() {
+			_ = cmd.Process.Kill()
+		}
+		_ = cmd.Wait()
+	}()
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("jira-mcp --version did not exit")
+	}
+
+	if got := strings.TrimSpace(output.String()); got != "jira-mcp dev" {
+		t.Fatalf("jira-mcp --version = %q, want %q", got, "jira-mcp dev")
+	}
+}
 
 func TestBinarySpeaksMCPOverStdio(t *testing.T) {
 	binary := os.Getenv("JIRA_MCP_BINARY")
