@@ -2,6 +2,19 @@
 
 All notable changes to Jira MCP will be documented in this file.
 
+## [0.6.4] - 2026-09-19
+
+### Bug Fixes
+
+- Respect Jira Cloud metadata page limits
+
+
+### Other
+
+- Merge pull request #12 from lucaswilliameufrasio/bugfix/cloud-create-metadata-page-limit
+
+fix: respect Jira Cloud metadata page limits
+
 ## [0.6.3] - 2026-09-19
 
 ### Bug Fixes
@@ -9,11 +22,20 @@ All notable changes to Jira MCP will be documented in this file.
 - Use current Jira Cloud create metadata APIs
 
 
+### Chores
+
+- *(release)* Prepare for v0.6.3
+
+
 ### Other
 
 - Merge pull request #10 from lucaswilliameufrasio/bugfix/cloud-create-issue-metadata
 
 fix: use current Jira Cloud create metadata APIs
+
+- Merge pull request #11 from lucaswilliameufrasio/release/v0.6.3
+
+Release v0.6.3
 
 ## [0.6.2] - 2026-09-19
 
