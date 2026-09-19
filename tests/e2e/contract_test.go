@@ -73,6 +73,28 @@ func (f *fakeJira) handle(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if r.URL.Path == "/rest/api/3/project/TEST" && r.Method == http.MethodGet {
+		writeJSON(w, http.StatusOK, map[string]any{"id": "10000", "key": "TEST", "name": "Test project"})
+		return
+	}
+	if r.URL.Path == "/rest/api/3/issue/createmeta/10000/issuetypes" && r.Method == http.MethodGet {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"startAt": 0, "maxResults": 50, "total": 1,
+			"issueTypes": []map[string]any{{"id": "10001", "name": "Task"}},
+		})
+		return
+	}
+	if r.URL.Path == "/rest/api/3/issue/createmeta/10000/issuetypes/10001" && r.Method == http.MethodGet {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"startAt": 0, "maxResults": 50, "total": 3,
+			"fields": []map[string]any{
+				{"fieldId": "project", "key": "project", "required": true, "name": "Project", "schema": map[string]any{"type": "project"}},
+				{"fieldId": "summary", "key": "summary", "required": true, "name": "Summary", "schema": map[string]any{"type": "string"}},
+				{"fieldId": "issuetype", "key": "issuetype", "required": true, "name": "Issue Type", "schema": map[string]any{"type": "issuetype"}},
+			},
+		})
+		return
+	}
 	if strings.HasSuffix(r.URL.Path, "/issue/createmeta") && r.Method == http.MethodGet {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"projects": []map[string]any{{

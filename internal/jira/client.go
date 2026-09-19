@@ -178,6 +178,11 @@ func (c *Client) BaseURL() string {
 	return c.cfg.BaseURL
 }
 
+// Deployment returns the configured Jira deployment type.
+func (c *Client) Deployment() Deployment {
+	return c.cfg.Deployment
+}
+
 // BrowseURL returns the web UI link for a given issue key.
 func (c *Client) BrowseURL(issueKey string) string {
 	if c.cfg.BaseURL == "" {
@@ -227,6 +232,7 @@ type CreateIssueLinkInput struct {
 }
 
 type FieldMetadata struct {
+	FieldID         string                 `json:"fieldId,omitempty"`
 	Required        bool                   `json:"required"`
 	Schema          map[string]interface{} `json:"schema,omitempty"`
 	Name            string                 `json:"name"`
@@ -251,8 +257,29 @@ type CreateMetadataProject struct {
 }
 
 type CreateMetadataType struct {
+	ID     string                   `json:"id"`
 	Name   string                   `json:"name"`
 	Fields map[string]FieldMetadata `json:"fields"`
+}
+
+type CreateMetadataIssueTypesPage struct {
+	IssueTypes []CreateMetadataType `json:"issueTypes"`
+	StartAt    int                  `json:"startAt"`
+	MaxResults int                  `json:"maxResults"`
+	Total      int                  `json:"total"`
+}
+
+type CreateMetadataFieldsPage struct {
+	Fields     []FieldMetadata `json:"fields"`
+	StartAt    int             `json:"startAt"`
+	MaxResults int             `json:"maxResults"`
+	Total      int             `json:"total"`
+}
+
+type CreateMetadataResolution struct {
+	ProjectID   string
+	IssueTypeID string
+	Fields      map[string]FieldMetadata
 }
 
 type IssueHierarchy struct {
@@ -396,6 +423,13 @@ func (c *Client) GetFieldMetadata(issueKey string) (*EditMetadata, error) {
 
 // GetCreateMetadata returns fields allowed for a project and issue type.
 func (c *Client) GetCreateMetadata(projectKey, issueType string) (map[string]FieldMetadata, error) {
+	if c.cfg.Deployment != DeploymentServer {
+		resolution, err := c.ResolveCreateMetadata(projectKey, issueType)
+		if err != nil {
+			return nil, err
+		}
+		return resolution.Fields, nil
+	}
 	q := url.Values{}
 	q.Set("projectKeys", projectKey)
 	q.Set("issuetypeNames", issueType)
@@ -409,12 +443,78 @@ func (c *Client) GetCreateMetadata(projectKey, issueType string) (map[string]Fie
 			continue
 		}
 		for _, issueTypeMetadata := range project.IssueTypes {
-			if strings.EqualFold(issueTypeMetadata.Name, issueType) {
+			if strings.EqualFold(issueTypeMetadata.Name, issueType) || issueTypeMetadata.ID == issueType {
 				return issueTypeMetadata.Fields, nil
 			}
 		}
 	}
 	return nil, fmt.Errorf("no create metadata found for project %s and issue type %s", projectKey, issueType)
+}
+
+// ResolveCreateMetadata resolves the project, issue type, and fields allowed
+// for creation. Cloud uses the current project-scoped paginated endpoints.
+func (c *Client) ResolveCreateMetadata(projectKey, issueType string) (*CreateMetadataResolution, error) {
+	project, err := c.GetProject(projectKey)
+	if err != nil {
+		return nil, fmt.Errorf("get project %s: %w", projectKey, err)
+	}
+
+	var issueTypeMetadata *CreateMetadataType
+	for startAt := 0; ; {
+		q := url.Values{}
+		q.Set("startAt", strconv.Itoa(startAt))
+		q.Set("maxResults", "1000")
+		var page CreateMetadataIssueTypesPage
+		path := c.apiPath("/issue/createmeta/" + url.PathEscape(project.ID) + "/issuetypes")
+		if err := c.doJSON(http.MethodGet, path, q, nil, &page); err != nil {
+			return nil, fmt.Errorf("get issue types for project %s: %w", projectKey, err)
+		}
+		for i := range page.IssueTypes {
+			candidate := &page.IssueTypes[i]
+			if candidate.ID == issueType || strings.EqualFold(candidate.Name, issueType) {
+				issueTypeMetadata = candidate
+				break
+			}
+		}
+		if issueTypeMetadata != nil || len(page.IssueTypes) == 0 || page.StartAt+len(page.IssueTypes) >= page.Total {
+			break
+		}
+		startAt = page.StartAt + len(page.IssueTypes)
+	}
+	if issueTypeMetadata == nil {
+		return nil, fmt.Errorf("no create metadata found for project %s and issue type %s", projectKey, issueType)
+	}
+
+	fields := make(map[string]FieldMetadata)
+	for startAt := 0; ; {
+		q := url.Values{}
+		q.Set("startAt", strconv.Itoa(startAt))
+		q.Set("maxResults", "1000")
+		var page CreateMetadataFieldsPage
+		path := c.apiPath("/issue/createmeta/" + url.PathEscape(project.ID) + "/issuetypes/" + url.PathEscape(issueTypeMetadata.ID))
+		if err := c.doJSON(http.MethodGet, path, q, nil, &page); err != nil {
+			return nil, fmt.Errorf("get create fields for project %s and issue type %s: %w", projectKey, issueType, err)
+		}
+		for _, field := range page.Fields {
+			key := field.Key
+			if key == "" {
+				key = field.FieldID
+			}
+			if key != "" {
+				fields[key] = field
+			}
+		}
+		if len(page.Fields) == 0 || page.StartAt+len(page.Fields) >= page.Total {
+			break
+		}
+		startAt = page.StartAt + len(page.Fields)
+	}
+
+	return &CreateMetadataResolution{
+		ProjectID:   project.ID,
+		IssueTypeID: issueTypeMetadata.ID,
+		Fields:      fields,
+	}, nil
 }
 
 // SetIssueEpic associates an issue with an Epic using the hierarchy mechanism
@@ -618,7 +718,9 @@ func (c *Client) UpdateIssueLink(linkID string, in CreateIssueLinkInput) error {
 // Document Format automatically when talking to Cloud (api/3).
 type CreateIssueInput struct {
 	ProjectKey  string
+	ProjectID   string
 	IssueType   string
+	IssueTypeID string
 	Summary     string
 	Description string
 	// ExtraFields lets callers set any additional Jira field by its API
@@ -627,10 +729,18 @@ type CreateIssueInput struct {
 }
 
 func (c *Client) CreateIssue(in CreateIssueInput) (*Issue, error) {
+	project := map[string]string{"key": in.ProjectKey}
+	if in.ProjectID != "" {
+		project = map[string]string{"id": in.ProjectID}
+	}
+	issueType := map[string]string{"name": in.IssueType}
+	if in.IssueTypeID != "" {
+		issueType = map[string]string{"id": in.IssueTypeID}
+	}
 	fields := map[string]interface{}{
-		"project":   map[string]string{"key": in.ProjectKey},
+		"project":   project,
 		"summary":   in.Summary,
-		"issuetype": map[string]string{"name": in.IssueType},
+		"issuetype": issueType,
 	}
 	if in.Description != "" {
 		fields["description"] = c.encodeDescription(in.Description)
@@ -685,6 +795,16 @@ func (c *Client) ValidateCreateFields(projectKey, issueType string, fields map[s
 	if err != nil {
 		return fmt.Errorf("get create metadata: %w", err)
 	}
+	return validateCreateFields(projectKey, issueType, metadata, fields)
+}
+
+// ValidateCreateFieldsAgainstMetadata validates fields using metadata already
+// resolved by the caller, avoiding a second request to Jira.
+func (c *Client) ValidateCreateFieldsAgainstMetadata(projectKey, issueType string, metadata map[string]FieldMetadata, fields map[string]interface{}) error {
+	return validateCreateFields(projectKey, issueType, metadata, fields)
+}
+
+func validateCreateFields(projectKey, issueType string, metadata map[string]FieldMetadata, fields map[string]interface{}) error {
 	for key, field := range metadata {
 		if field.Required {
 			if _, ok := fields[key]; !ok {
@@ -790,6 +910,16 @@ func (c *Client) ListProjects() ([]Project, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+// GetProject fetches one project by key or ID.
+func (c *Client) GetProject(projectKey string) (*Project, error) {
+	var out Project
+	path := c.apiPath("/project/" + url.PathEscape(projectKey))
+	if err := c.doJSON(http.MethodGet, path, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // AssignIssue assigns (or unassigns, with accountIDOrNil == "unassign") an
