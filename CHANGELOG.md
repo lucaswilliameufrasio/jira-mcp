@@ -2,11 +2,29 @@
 
 All notable changes to Jira MCP will be documented in this file.
 
+## [0.6.2] - 2026-09-19
+
+### Bug Fixes
+
+- *(cli)* Exit after printing version
+
 ## [0.6.1] - 2026-09-17
 
 ### Bug Fixes
 
 - Expose issue ranking tools in selection
+
+
+### Chores
+
+- *(release)* Prepare for v0.6.1
+
+
+### Other
+
+- Merge pull request #8 from lucaswilliameufrasio/release/v0.6.1
+
+Release v0.6.1
 
 ## [0.6.0] - 2026-09-17
 
