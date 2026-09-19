@@ -2,11 +2,36 @@
 
 All notable changes to Jira MCP will be documented in this file.
 
+## [0.6.3] - 2026-09-19
+
+### Bug Fixes
+
+- Use current Jira Cloud create metadata APIs
+
+
+### Other
+
+- Merge pull request #10 from lucaswilliameufrasio/bugfix/cloud-create-issue-metadata
+
+fix: use current Jira Cloud create metadata APIs
+
 ## [0.6.2] - 2026-09-19
 
 ### Bug Fixes
 
 - *(cli)* Exit after printing version
+
+
+### Chores
+
+- *(release)* Prepare for v0.6.2
+
+
+### Other
+
+- Merge pull request #9 from lucaswilliameufrasio/release/v0.6.2
+
+Release v0.6.2
 
 ## [0.6.1] - 2026-09-17
 
