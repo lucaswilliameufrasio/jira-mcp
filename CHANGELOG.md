@@ -2,6 +2,12 @@
 
 All notable changes to Jira MCP will be documented in this file.
 
+## [0.6.5] - 2026-09-23
+
+### Bug Fixes
+
+- *(jira)* Handle ADF for cloud issue updates (#14)
+
 ## [0.6.4] - 2026-09-19
 
 ### Bug Fixes
@@ -9,11 +15,20 @@ All notable changes to Jira MCP will be documented in this file.
 - Respect Jira Cloud metadata page limits
 
 
+### Chores
+
+- *(release)* Prepare for v0.6.4
+
+
 ### Other
 
 - Merge pull request #12 from lucaswilliameufrasio/bugfix/cloud-create-metadata-page-limit
 
 fix: respect Jira Cloud metadata page limits
+
+- Merge pull request #13 from lucaswilliameufrasio/release/v0.6.4
+
+Release v0.6.4
 
 ## [0.6.3] - 2026-09-19
 
