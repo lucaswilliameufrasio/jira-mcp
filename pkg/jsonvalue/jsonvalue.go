@@ -17,6 +17,9 @@ func ValidateSchema(value interface{}, schema map[string]interface{}) error {
 	case "", "any":
 		return nil
 	case "string":
+		if IsADFDocument(value) {
+			return nil
+		}
 		if _, ok := value.(string); !ok {
 			return fmt.Errorf("expected string, got %s", kind(value))
 		}
@@ -42,6 +45,18 @@ func ValidateSchema(value interface{}, schema map[string]interface{}) error {
 		}
 	}
 	return nil
+}
+
+// IsADFDocument reports whether value has the required top-level shape of an
+// Atlassian Document Format document. Jira-specific node validation remains
+// the responsibility of Jira itself.
+func IsADFDocument(value interface{}) bool {
+	document, ok := value.(map[string]interface{})
+	if !ok || document["type"] != "doc" || document["version"] != float64(1) {
+		return false
+	}
+	content, ok := document["content"].([]interface{})
+	return ok && content != nil
 }
 
 func isNumber(value interface{}) bool {

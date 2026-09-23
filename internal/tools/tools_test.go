@@ -53,6 +53,42 @@ func TestHandleUpdateIssueAcceptsCustomFields(t *testing.T) {
 	}
 }
 
+func TestHandleUpdateIssueAcceptsADFForDescriptionAndLongTextCustomFields(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			fields := map[string]jira.FieldMetadata{
+				"description":       {Name: "Description", Schema: map[string]interface{}{"type": "string"}, Operations: []string{"set"}},
+				"customfield_10073": {Name: "Acceptance criteria", Schema: map[string]interface{}{"type": "string"}, Operations: []string{"set"}},
+				"customfield_10232": {Name: "Details", Schema: map[string]interface{}{"type": "string"}, Operations: []string{"set"}},
+			}
+			_ = json.NewEncoder(w).Encode(jira.EditMetadata{Fields: fields})
+			return
+		}
+		var body map[string]map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		for _, key := range []string{"description", "customfield_10073", "customfield_10232"} {
+			value, ok := body["fields"][key].(map[string]interface{})
+			if !ok || value["type"] != "doc" {
+				t.Errorf("fields[%q] = %#v, want ADF doc", key, body["fields"][key])
+			}
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	client := jira.NewClient(jira.Config{BaseURL: server.URL, Deployment: jira.DeploymentCloud, BearerToken: "token"})
+	input := `{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"custom text"}]}]}`
+	got, err := handleUpdateIssue(client)(json.RawMessage(`{"issue_key":"TEST-1","fields":{"description":"updated plain text"},"custom_fields":{"customfield_10073":` + input + `,"customfield_10232":` + input + `}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "atualizada") {
+		t.Fatalf("result = %q", got)
+	}
+}
+
 func TestFormatFieldMetadataFiltersCustomFieldsByDefault(t *testing.T) {
 	metadata := &jira.EditMetadata{Fields: map[string]jira.FieldMetadata{
 		"summary": {

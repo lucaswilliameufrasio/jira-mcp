@@ -108,6 +108,36 @@ func TestUpdateIssueSendsCustomFields(t *testing.T) {
 	}
 }
 
+func TestUpdateIssueEncodesDescriptionAndPreservesCustomFieldADF(t *testing.T) {
+	customFieldADF := map[string]interface{}{
+		"type": "doc", "version": 1,
+		"content": []interface{}{map[string]interface{}{"type": "paragraph", "content": []interface{}{map[string]interface{}{"type": "text", "text": "acceptance"}}}},
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		fields := body["fields"]
+		description, ok := fields["description"].(map[string]interface{})
+		if !ok || description["type"] != "doc" || description["version"] != float64(1) {
+			t.Fatalf("description = %#v", fields["description"])
+		}
+		if fields["customfield_10073"] == nil || fields["customfield_10232"] == nil {
+			t.Fatalf("custom fields missing from payload: %#v", fields)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	err := NewClient(Config{BaseURL: server.URL, Deployment: DeploymentCloud, BearerToken: "token"}).UpdateIssue("TEST-1", map[string]interface{}{
+		"description": "plain text description", "customfield_10073": customFieldADF, "customfield_10232": customFieldADF,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestGetFieldMetadataCloudUsesEditMetaEndpoint(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/rest/api/3/issue/TEST-1/editmeta" {

@@ -759,8 +759,22 @@ func (c *Client) CreateIssue(in CreateIssueInput) (*Issue, error) {
 
 // UpdateIssue applies a partial field update to an existing issue.
 func (c *Client) UpdateIssue(issueKey string, fields map[string]interface{}) error {
+	if c.cfg.Deployment != DeploymentServer {
+		if description, ok := fields["description"].(string); ok {
+			fields = copyFields(fields)
+			fields["description"] = c.encodeDescription(description)
+		}
+	}
 	body := map[string]interface{}{"fields": fields}
 	return c.doJSON(http.MethodPut, c.apiPath("/issue/"+url.PathEscape(issueKey)), nil, body, nil)
+}
+
+func copyFields(fields map[string]interface{}) map[string]interface{} {
+	copy := make(map[string]interface{}, len(fields))
+	for key, value := range fields {
+		copy[key] = value
+	}
+	return copy
 }
 
 // ValidateIssueFields checks update fields against the issue's edit metadata
