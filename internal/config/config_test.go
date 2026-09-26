@@ -116,8 +116,8 @@ func TestRunSetupWritesPrivateConfig(t *testing.T) {
 	if loaded.APIToken != "secret" || len(loaded.Tools) == 0 {
 		t.Fatalf("unexpected saved config: %+v", loaded)
 	}
-	if !strings.Contains(output.String(), "none are preselected") {
-		t.Fatalf("setup did not explain client selection defaults: %s", output.String())
+	if !strings.Contains(output.String(), "Create a Cloud API token at https://id.atlassian.com/manage-profile/security/api-tokens") {
+		t.Fatalf("setup did not explain where to get a Cloud API token: %s", output.String())
 	}
 }
 
