@@ -2,11 +2,29 @@
 
 All notable changes to Jira MCP will be documented in this file.
 
+## [0.7.0] - 2026-09-26
+
+### Features
+
+- *(cli)* Improve Jira MCP setup and client onboarding
+
 ## [0.6.5] - 2026-09-23
 
 ### Bug Fixes
 
 - *(jira)* Handle ADF for cloud issue updates (#14)
+
+
+### Chores
+
+- *(release)* Prepare for v0.6.5
+
+
+### Other
+
+- Merge pull request #15 from lucaswilliameufrasio/release/v0.6.5
+
+Release v0.6.5
 
 ## [0.6.4] - 2026-09-19
 
