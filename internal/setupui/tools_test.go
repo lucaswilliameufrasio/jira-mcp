@@ -44,6 +44,19 @@ func TestToolsModelCanDisableEverythingBeforeConfirming(t *testing.T) {
 	}
 }
 
+func TestOptionalClientSelectionCanConfirmNone(t *testing.T) {
+	model := toolsModel{
+		choices:    []string{"client"},
+		selected:   map[string]bool{},
+		allowEmpty: true,
+	}
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(toolsModel)
+	if command == nil || len(model.result) != 0 {
+		t.Fatalf("empty client selection was not confirmed: result=%#v command=%v", model.result, command)
+	}
+}
+
 func TestToolsModelSelectsAll(t *testing.T) {
 	model := toolsModel{
 		choices:  []string{"one", "two"},
@@ -53,5 +66,16 @@ func TestToolsModelSelectsAll(t *testing.T) {
 	model = updated.(toolsModel)
 	if got := model.selection(); len(got) != 2 {
 		t.Fatalf("selection = %#v", got)
+	}
+}
+
+func TestSelectedChoicesLeavesEmptyCurrentUnselected(t *testing.T) {
+	selected := selectedChoices(nil)
+	if len(selected) != 0 {
+		t.Fatalf("initial client selection = %#v, want none preselected", selected)
+	}
+	selected = selectedChoices([]string{"one"})
+	if len(selected) != 1 || !selected["one"] {
+		t.Fatalf("existing selection = %#v", selected)
 	}
 }

@@ -54,11 +54,12 @@ const ogImage = "https://raw.githubusercontent.com/lucaswilliameufrasio/jira-mcp
           <div class="terminal-bar"><span></span><span></span><span></span><small>terminal</small></div>
           <div class="terminal-body">
             <p><b class="green">$</b> jira-mcp setup</p>
-            <p class="muted">Jira URL: https://acme.atlassian.net</p>
-            <p class="muted">Deployment (cloud/server): cloud</p>
-            <p class="muted">Jira email: you@acme.com</p>
-            <p class="muted">Jira API token: ********</p>
-            <p><b class="green">&#10003;</b> Ready. Connect your MCP host.</p>
+            <p class="muted">Jira site URL: https://acme.atlassian.net</p>
+            <p class="muted">Deployment: cloud</p>
+            <p class="muted">Atlassian account email: you@acme.com</p>
+            <p class="muted">Cloud API token (input hidden): ********</p>
+            <p><b class="green">&#10003;</b> Saved locally. Choose your AI client.</p>
+            <p class="muted">Restart the client, then run jira-mcp doctor if needed.</p>
             <p class="cursor">&#9608;</p>
           </div>
         </div>
@@ -71,15 +72,18 @@ const ogImage = "https://raw.githubusercontent.com/lucaswilliameufrasio/jira-mcp
       </section>
 
       <section class="quick-start" id="quick-start">
-        <div><p class="eyebrow">01 / Local setup</p><h2>Connect in under a minute.</h2><p>Download a release or build from source, then let the setup wizard create a local configuration with restrictive permissions. Want a shared instance? Deploy your own — the repository's <a href="https://github.com/lucaswilliameufrasio/jira-mcp/tree/main/docs/deployment">deployment guides</a> cover self-hosting on Railway or any environment.</p></div>
+        <div><p class="eyebrow">01 / Local setup</p><h2>Connect in under a minute.</h2><p>For Jira Cloud, create an API token at <a href="https://id.atlassian.com/manage-profile/security/api-tokens">Atlassian account security</a>. The wizard hides token input, saves credentials in a user-only local config, and detects AI clients to configure. Add another client later with <code>jira-mcp install-mcp</code>; add Jira usage guidance to your project with <code>jira-mcp install-instructions</code>. Want a shared instance? Deploy your own — the repository's <a href="https://github.com/lucaswilliameufrasio/jira-mcp/tree/main/docs/deployment">deployment guides</a> cover self-hosting on Railway or any environment.</p></div>
         <pre><code><span class="comment"># build</span>
-go build -o jira-mcp .
+go build -o jira-mcp ./cmd/jira-mcp
 
 <span class="comment"># configure</span>
 ./jira-mcp setup
 
+<span class="comment"># register another client later</span>
+./jira-mcp install-mcp
+
 <span class="comment"># run over stdio</span>
- ./jira-mcp</code></pre>
+./jira-mcp</code></pre>
       </section>
 
       <section class="quick-start remote-start" id="remote-setup">

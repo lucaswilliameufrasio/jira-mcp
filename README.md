@@ -143,24 +143,48 @@ fakes determinísticos, sem exigir credenciais reais.
 
 ## Configuração
 
-O servidor lê tudo de variáveis de ambiente:
+O servidor aceita variáveis de ambiente ou um perfil local salvo pelo assistente:
 
-Para configuração interativa, execute `jira-mcp setup`. O comando salva as
-credenciais com permissão restrita em `XDG_CONFIG_HOME/jira-mcp/config.json`,
-detecta clientes MCP instalados (OpenCode, Claude Code/Desktop, Codex CLI, VS Code e Zed)
-e pergunta em quais configurações adicionar o servidor. Configurações já
-contendo `jira-mcp` aparecem marcadas e ficam selecionadas por padrão. As
-mesmas credenciais são reutilizadas automaticamente; não é necessário digitá-
-las novamente.
+Para configurar pela primeira vez, execute `jira-mcp setup`. O assistente explica
+os dados necessários e onde obter cada credencial:
 
-Ao executar o setup novamente, pressione Enter para manter os clientes atuais
+- **Jira Cloud:** URL do site, email da conta Atlassian e API token. Gere o token
+  em <https://id.atlassian.com/manage-profile/security/api-tokens>.
+- **Jira Server/Data Center:** URL da instância e Personal Access Token; se a
+  opção não aparecer no seu perfil, peça ao administrador do Jira.
+
+O token é digitado sem aparecer no terminal. Depois de salvo, o prompt informa
+que há um segredo salvo: pressione Enter para mantê-lo ou digite um novo para
+substituí-lo. O arquivo local fica em `XDG_CONFIG_HOME/jira-mcp/config.json`
+(ou `~/.config/jira-mcp/config.json`) com permissão restrita ao usuário.
+As configurações dos clientes guardam apenas o nome do perfil, não copiam o
+token para cada arquivo de configuração.
+
+O setup detecta clientes compatíveis (OpenCode, Claude Code/Desktop, Codex CLI,
+VS Code e Zed) e mostra os caminhos de configuração encontrados. Clientes já
+configurados começam selecionados ao reabrir o setup; na primeira execução,
+nenhum cliente vem pré-selecionado, então escolha explicitamente onde instalar.
+No seletor interativo, use setas para mover, `Space` para marcar/desmarcar, `a`
+para selecionar todos, `n` para limpar e `Enter` para confirmar; `Esc` cancela. Para
+configurar depois um cliente novo sem repetir as credenciais, execute
+`jira-mcp install-mcp`.
+
+Depois do setup, reinicie ou recarregue os servidores MCP no cliente escolhido,
+confirme que `jira-mcp` aparece conectado e teste com um pedido simples, como
+“busque a issue PROJ-123 no Jira”. Para diagnosticar a instalação, execute
+`jira-mcp doctor`.
+
+Para instalar ou atualizar instruções de uso do Jira MCP nos arquivos
+`AGENTS.md` e `CLAUDE.md` do projeto atual, execute
+`jira-mcp install-instructions`. O comando atualiza somente seu bloco marcado e
+preserva o restante dos arquivos.
+
+Ao executar o setup novamente, pressione Enter para manter os valores atuais
 ou selecione uma nova lista. Use `none` para remover o `jira-mcp` de todos os
-clientes detectados. Em um terminal interativo, o setup abre uma TUI: use as
-setas para navegar, `Space` para marcar/desmarcar itens, `a` para selecionar
-todos, `n` para limpar e `Enter` para confirmar. A TUI permite escolher a
-conexão Jira salva, criar uma nova conexão, selecionar tools e selecionar os
-clientes MCP a configurar. Ao criar uma conexão, a URL Jira é obrigatória; ao
-editar uma conexão existente, Enter mantém a URL atual.
+clientes detectados. Em um terminal interativo, a TUI permite escolher uma
+conexão salva ou criar outra, selecionar tools e selecionar clientes. Ao criar
+uma conexão, informe a URL Jira; ao editar uma conexão, Enter mantém os valores
+atuais e os segredos não são exibidos.
 
 Uma conta pode ter várias conexões para URLs Jira diferentes. Cada URL é salva
 como um perfil separado, mesmo quando usa o mesmo email/token. Use

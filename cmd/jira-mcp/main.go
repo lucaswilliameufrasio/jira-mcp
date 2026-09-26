@@ -37,6 +37,10 @@ import (
 var version = "dev"
 
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "--help" || os.Args[1] == "-h" || os.Args[1] == "help") {
+		printHelp(os.Stdout)
+		return
+	}
 	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-version") {
 		fmt.Printf("jira-mcp %s\n", version)
 		return
@@ -44,6 +48,20 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "setup" {
 		if err := config.RunSetup(os.Stdin, os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, "[jira-mcp] setup error:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "install-mcp" {
+		if err := config.InstallMCP(os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "[jira-mcp] MCP installation error:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "install-instructions" {
+		if err := installInstructions(os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "[jira-mcp] instructions installation error:", err)
 			os.Exit(1)
 		}
 		return
@@ -79,6 +97,70 @@ func main() {
 		fmt.Fprintln(os.Stderr, "[jira-mcp] fatal error:", err)
 		os.Exit(1)
 	}
+}
+
+func printHelp(out *os.File) {
+	_, _ = fmt.Fprintln(out, "jira-mcp — Jira MCP server and setup tools")
+	_, _ = fmt.Fprintln(out, "")
+	_, _ = fmt.Fprintln(out, "Usage:")
+	_, _ = fmt.Fprintln(out, "  jira-mcp                  Start the MCP server over stdio")
+	_, _ = fmt.Fprintln(out, "  jira-mcp setup            Save a Jira connection and configure AI clients")
+	_, _ = fmt.Fprintln(out, "  jira-mcp install-mcp      Register a saved connection in selected AI clients")
+	_, _ = fmt.Fprintln(out, "  jira-mcp install-instructions  Add or refresh Jira MCP agent guidance in AGENTS.md and CLAUDE.md")
+	_, _ = fmt.Fprintln(out, "  jira-mcp doctor           Check saved configuration, clients, and MCP tools")
+	_, _ = fmt.Fprintln(out, "  jira-mcp remote           Start the self-hosted HTTP/OAuth server")
+	_, _ = fmt.Fprintln(out, "  jira-mcp --version        Print the version")
+	_, _ = fmt.Fprintln(out, "")
+	_, _ = fmt.Fprintln(out, "Run `jira-mcp setup` first for a local Jira connection. Run `jira-mcp help` for this page.")
+}
+
+func installInstructions(out *os.File) error {
+	content := strings.Join([]string{
+		"<!-- jira-mcp:start -->",
+		"## Jira MCP",
+		"",
+		"- Use Jira MCP tools for Jira work; do not ask the user to copy API tokens into chat.",
+		"- Search for an issue with `jira_search` using JQL, then use `jira_get_issue` with its key when full details are needed.",
+		"- Before changing an issue, inspect its current fields and available transitions. Use `jira_update_issue`, `jira_transition_issue`, comments, assignments, links, and ranking tools only when the requested action is clear.",
+		"- For custom fields, call `jira_get_field_metadata` first and send the field's API key and expected JSON type.",
+		"- For workflow changes, call `jira_list_transitions` before `jira_transition_issue`; use an exact transition name or ID.",
+		"- For attachments, call `jira_list_attachments` first. Images can be analyzed inline; other files are returned as authenticated links.",
+		"- If Jira tools are unavailable, tell the user to run `jira-mcp doctor` and restart/reload their MCP client after configuration changes.",
+		"<!-- jira-mcp:end -->",
+	}, "\n")
+	paths := []string{"AGENTS.md", "CLAUDE.md"}
+	for _, path := range paths {
+		if err := updateManagedInstructions(path, content); err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintf(out, "Updated Jira MCP instructions in %s\n", path)
+	}
+	return nil
+}
+
+func updateManagedInstructions(path, content string) error {
+	const start = "<!-- jira-mcp:start -->"
+	const end = "<!-- jira-mcp:end -->"
+	current, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	text := string(current)
+	startIndex := strings.Index(text, start)
+	endIndex := strings.Index(text, end)
+	if startIndex >= 0 && endIndex > startIndex {
+		endIndex += len(end)
+		text = text[:startIndex] + strings.TrimSpace(content) + text[endIndex:]
+	} else {
+		if text != "" && !strings.HasSuffix(text, "\n") {
+			text += "\n"
+		}
+		if text != "" {
+			text += "\n"
+		}
+		text += strings.TrimSpace(content) + "\n"
+	}
+	return os.WriteFile(path, []byte(text), 0600)
 }
 
 func runDoctor() error {

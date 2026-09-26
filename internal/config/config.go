@@ -93,6 +93,10 @@ func Resolve() (jira.Config, map[string]bool, error) {
 
 func RunSetup(in io.Reader, out io.Writer) error {
 	r := bufio.NewReader(in)
+	_, _ = fmt.Fprintln(out, "Jira MCP setup")
+	_, _ = fmt.Fprintln(out, "This wizard saves a local Jira connection and can register it in your AI client.")
+	_, _ = fmt.Fprintln(out, "Credentials stay in your local config; never paste them into chat or project files.")
+	_, _ = fmt.Fprintln(out, "")
 	file := File{}
 	var err error
 	if existing, loadErr := Load(); loadErr == nil {
@@ -114,23 +118,28 @@ func RunSetup(in io.Reader, out io.Writer) error {
 		}
 	}
 
-	file.BaseURL, err = ask(r, out, "Jira URL", file.BaseURL, true)
+	_, _ = fmt.Fprintln(out, "Connection details")
+	_, _ = fmt.Fprintln(out, "  Jira Cloud: use your site URL (https://company.atlassian.net), Atlassian account email, and an API token.")
+	_, _ = fmt.Fprintln(out, "  Create a Cloud API token at https://id.atlassian.com/manage-profile/security/api-tokens")
+	_, _ = fmt.Fprintln(out, "  Server/Data Center: use your Jira URL and a Personal Access Token from your Jira profile or administrator.")
+	_, _ = fmt.Fprintln(out, "  Press Enter on a saved secret to keep it; entering a value replaces it. Secrets are not shown.")
+	file.BaseURL, err = ask(r, out, "Jira site URL (for example https://company.atlassian.net)", file.BaseURL, true)
 	if err != nil {
 		return err
 	}
-	deployment, err := ask(r, out, "Deployment (cloud/server)", defaultString(file.Deployment, "cloud"), true)
+	deployment, err := ask(r, out, "Jira deployment (cloud or server; Data Center uses server)", defaultString(file.Deployment, "cloud"), true)
 	if err != nil {
 		return err
 	}
-	file.Deployment = strings.ToLower(deployment)
+	file.Deployment = normalizeDeployment(deployment)
 	if file.Deployment == "cloud" {
-		file.Email, err = ask(r, out, "Jira email", file.Email, true)
+		file.Email, err = ask(r, out, "Atlassian account email", file.Email, true)
 		if err != nil {
 			return err
 		}
-		file.APIToken, err = ask(r, out, "Jira API token", file.APIToken, true)
+		file.APIToken, err = askSecret(r, out, "Jira Cloud API token", file.APIToken, interactive)
 	} else {
-		file.PersonalAccessToken, err = ask(r, out, "Jira personal access token", file.PersonalAccessToken, true)
+		file.PersonalAccessToken, err = askSecret(r, out, "Jira Server/Data Center Personal Access Token", file.PersonalAccessToken, interactive)
 	}
 	if err != nil {
 		return err
@@ -139,8 +148,12 @@ func RunSetup(in io.Reader, out io.Writer) error {
 	if interactive {
 		// Bubble Tea needs the terminal file itself to enable raw mode. Passing
 		// the buffered reader here leaves escape sequences visible in the UI.
+		_, _ = fmt.Fprintln(out, "\nTools control which Jira operations the AI client can call.")
+		_, _ = fmt.Fprintln(out, "Read tools search or inspect Jira; create/update/comment/transition tools can make real changes using this Jira account.")
+		_, _ = fmt.Fprintln(out, "Your Jira account permissions still apply. Enable only the operations you want available.")
 		file.Tools, err = setupui.SelectTools(os.Stdin, out, tools.AvailableToolNames(), file.Tools)
 	} else {
+		_, _ = fmt.Fprintln(out, "\nTools control which Jira operations the AI client can call; write tools can make real changes to Jira.")
 		file.Tools, err = configureTools(r, out, file.Tools, tools.AvailableToolNames())
 	}
 	if err != nil {
@@ -162,16 +175,20 @@ func RunSetup(in io.Reader, out io.Writer) error {
 	if err := os.WriteFile(path, append(b, '\n'), 0600); err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(out, "Saved %s\n", path)
+	_, _ = fmt.Fprintf(out, "\nSaved connection to %s (permissions: owner read/write only).\n", path)
 
 	targets := detectedInstallTargets()
 	if len(targets) == 0 {
-		_, _ = fmt.Fprintln(out, "No supported MCP client detected; configure the client manually if needed.")
+		_, _ = fmt.Fprintln(out, "No supported MCP client was detected.")
+		_, _ = fmt.Fprintln(out, "Install or open an MCP client, then run `jira-mcp install-mcp`, or follow the manual setup guide:")
+		_, _ = fmt.Fprintln(out, "https://github.com/lucaswilliameufrasio/jira-mcp#integra%C3%A7%C3%A3o-com-clientes-mcp")
 		return nil
 	}
 
 	clientChoices := make([]string, len(targets))
-	_, _ = fmt.Fprintln(out, "\nDetected MCP clients:")
+	_, _ = fmt.Fprintln(out, "\nChoose where the Jira server should be registered.")
+	_, _ = fmt.Fprintln(out, "Choose only the clients you want to use. On first setup, none are preselected; existing registrations stay selected on later runs.")
+	_, _ = fmt.Fprintln(out, "Use Space to toggle, a to select all, n to clear, and Enter to confirm. Unselecting an existing client removes jira-mcp from its config.")
 	for i, target := range targets {
 		clientChoices[i] = target.Name
 		status := "not configured"
@@ -183,19 +200,18 @@ func RunSetup(in io.Reader, out io.Writer) error {
 	defaultTargets := configuredTargetSelection(targets)
 	var selected []string
 	if interactive {
-		selected, err = setupui.SelectMany(os.Stdin, out, "Select MCP clients to configure", clientChoices, configuredTargetNames(targets))
+		selected, err = setupui.SelectManyAllowEmpty(os.Stdin, out, "Select MCP clients to configure", clientChoices, configuredTargetNames(targets))
 		if err != nil {
 			return err
 		}
 	} else {
-		clientSelection, askErr := ask(r, out, "Clients to configure (numbers, 'none', or Enter keeps current)", defaultTargets, false)
+		clientSelection, askErr := ask(r, out, "Clients to configure (numbers/names, 'none', or Enter keeps current)", defaultTargets, false)
 		if askErr != nil {
 			return askErr
 		}
 		if clientSelection == "" {
-			return nil
-		}
-		if strings.EqualFold(strings.TrimSpace(clientSelection), "none") {
+			selected = configuredTargetNames(targets)
+		} else if strings.EqualFold(strings.TrimSpace(clientSelection), "none") {
 			selected = nil
 		} else {
 			selected, err = selection.Parse(clientSelection, clientChoices)
@@ -221,6 +237,82 @@ func RunSetup(in io.Reader, out io.Writer) error {
 			_, _ = fmt.Fprintf(out, "Removed jira-mcp from %s\n", target.Path)
 		}
 	}
+	if len(selected) == 0 {
+		_, _ = fmt.Fprintln(out, "No MCP client is configured. Your Jira connection is saved; run `jira-mcp install-mcp` when you are ready to select a client.")
+	} else {
+		_, _ = fmt.Fprintln(out, "\nNext steps:")
+		_, _ = fmt.Fprintln(out, "  1. Restart the selected AI client (or reload its MCP servers).")
+		_, _ = fmt.Fprintln(out, "  2. Confirm that `jira-mcp` is connected and its Jira tools are listed.")
+		_, _ = fmt.Fprintln(out, "  3. Ask the agent to search for a known issue, for example `Find PROJ-123 in Jira`.")
+		_, _ = fmt.Fprintln(out, "  If it does not connect, run `jira-mcp doctor` and check that the client uses the installed binary.")
+	}
+	return nil
+}
+
+// InstallMCP adds the saved active Jira profile to selected detected MCP clients.
+func InstallMCP(in io.Reader, out io.Writer) error {
+	file, err := Load()
+	if err != nil {
+		return fmt.Errorf("no saved Jira connection; run `jira-mcp setup` first: %w", err)
+	}
+	file = activeProfileFile(file)
+	if _, err := toJiraConfig(file); err != nil {
+		return fmt.Errorf("saved Jira connection is incomplete; run `jira-mcp setup`: %w", err)
+	}
+	targets := detectedInstallTargets()
+	if len(targets) == 0 {
+		return errors.New("no supported MCP clients detected; run `jira-mcp setup` or configure a client manually")
+	}
+	choices := make([]string, len(targets))
+	current := make([]string, 0, len(targets))
+	_, _ = fmt.Fprintln(out, "Select the AI clients where Jira MCP should be registered.")
+	for index, target := range targets {
+		choices[index] = target.Name
+		status := "not configured"
+		if target.Configured {
+			status = "already configured"
+			current = append(current, target.Name)
+		}
+		_, _ = fmt.Fprintf(out, "  %d. %s — %s\n     Config: %s\n", index+1, target.Name, status, target.Path)
+	}
+	var selected []string
+	if term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd())) {
+		selected, err = setupui.SelectManyAllowEmpty(os.Stdin, out, "Select clients (Space toggles, Enter confirms)", choices, current)
+	} else {
+		reader := bufio.NewReader(in)
+		value, askErr := ask(reader, out, "Clients (numbers or names; Enter keeps current)", strings.Join(current, ","), false)
+		if askErr != nil {
+			return askErr
+		}
+		if value == "" {
+			selected = current
+		} else {
+			selected, err = selection.Parse(value, choices)
+		}
+	}
+	if err != nil {
+		return err
+	}
+	selectedSet := make(map[string]bool, len(selected))
+	for _, name := range selected {
+		selectedSet[name] = true
+	}
+	installed := 0
+	for _, target := range targets {
+		if !selectedSet[target.Name] {
+			continue
+		}
+		if err := updateTarget(target, file); err != nil {
+			return fmt.Errorf("configure %s: %w", target.Name, err)
+		}
+		_, _ = fmt.Fprintf(out, "Registered Jira MCP in %s\n", target.Path)
+		installed++
+	}
+	if installed == 0 {
+		_, _ = fmt.Fprintln(out, "No clients selected; no configuration changed.")
+		return nil
+	}
+	_, _ = fmt.Fprintln(out, "Restart or reload the selected clients to connect.")
 	return nil
 }
 
@@ -367,12 +459,12 @@ func profileName(baseURL string) string {
 func detectBoards(out io.Writer, file File) {
 	cfg, err := toJiraConfig(file)
 	if err != nil {
-		_, _ = fmt.Fprintf(out, "\nBoards: unable to authenticate (%v)\n", err)
+		_, _ = fmt.Fprintf(out, "\nJira connection check skipped: %v\n", err)
 		return
 	}
 	boards, err := jira.NewClient(cfg).ListBoards("", 200)
 	if err != nil {
-		_, _ = fmt.Fprintf(out, "\nBoards: discovery failed (%v)\n", err)
+		_, _ = fmt.Fprintf(out, "\nJira connection check failed: %v\n", err)
 		return
 	}
 	_, _ = fmt.Fprintf(out, "\nBoards detected: %d\n", len(boards))
@@ -559,15 +651,7 @@ func targetServerKey(format string) string {
 
 func serverEntry(format string, file File) map[string]any {
 	environment := map[string]string{
-		"JIRA_BASE_URL":  file.BaseURL,
-		"JIRA_MCP_TOOLS": strings.Join(file.Tools, ","),
-	}
-	if strings.EqualFold(file.Deployment, "server") || strings.EqualFold(file.Deployment, "datacenter") || strings.EqualFold(file.Deployment, "data-center") || strings.EqualFold(file.Deployment, "dc") {
-		environment["JIRA_DEPLOYMENT"] = "server"
-		environment["JIRA_PERSONAL_ACCESS_TOKEN"] = file.PersonalAccessToken
-	} else {
-		environment["JIRA_EMAIL"] = file.Email
-		environment["JIRA_API_TOKEN"] = file.APIToken
+		"JIRA_MCP_PROFILE": file.ActiveProfile,
 	}
 	command := executablePath()
 	switch format {
@@ -604,7 +688,7 @@ func updateCodexConfig(path string, file File, remove bool) error {
 		result += "\n\n[mcp_servers.jira]\n"
 		result += "command = " + strconv.Quote(executablePath()) + "\n"
 		result += "args = []\n\n[mcp_servers.jira.env]\n"
-		for _, name := range []string{"JIRA_BASE_URL", "JIRA_MCP_TOOLS", "JIRA_DEPLOYMENT", "JIRA_EMAIL", "JIRA_API_TOKEN", "JIRA_PERSONAL_ACCESS_TOKEN"} {
+		for _, name := range []string{"JIRA_MCP_PROFILE"} {
 			if value := codexEnvironment(file)[name]; value != "" {
 				result += name + " = " + strconv.Quote(value) + "\n"
 			}
@@ -620,18 +704,7 @@ func updateCodexConfig(path string, file File, remove bool) error {
 }
 
 func codexEnvironment(file File) map[string]string {
-	environment := map[string]string{
-		"JIRA_BASE_URL":  file.BaseURL,
-		"JIRA_MCP_TOOLS": strings.Join(file.Tools, ","),
-	}
-	if strings.EqualFold(file.Deployment, "server") || strings.EqualFold(file.Deployment, "datacenter") || strings.EqualFold(file.Deployment, "data-center") || strings.EqualFold(file.Deployment, "dc") {
-		environment["JIRA_DEPLOYMENT"] = "server"
-		environment["JIRA_PERSONAL_ACCESS_TOKEN"] = file.PersonalAccessToken
-	} else {
-		environment["JIRA_EMAIL"] = file.Email
-		environment["JIRA_API_TOKEN"] = file.APIToken
-	}
-	return environment
+	return map[string]string{"JIRA_MCP_PROFILE": file.ActiveProfile}
 }
 
 func executablePath() string {
@@ -682,6 +755,16 @@ func toJiraConfig(file File) (jira.Config, error) {
 	return cfg, nil
 }
 
+func normalizeDeployment(value string) string {
+	deployment := strings.ToLower(strings.TrimSpace(value))
+	switch deployment {
+	case "data center", "data-center", "datacenter", "dc":
+		return "server"
+	default:
+		return deployment
+	}
+}
+
 func enabledTools(names []string) map[string]bool {
 	if len(names) == 0 {
 		return nil
@@ -714,6 +797,35 @@ func ask(r *bufio.Reader, out io.Writer, label, current string, required bool) (
 		value = current
 	}
 	if required && value == "" {
+		return "", fmt.Errorf("%s is required", label)
+	}
+	return value, nil
+}
+
+func askSecret(r *bufio.Reader, out io.Writer, label, current string, interactive bool) (string, error) {
+	if current == "" {
+		_, _ = fmt.Fprintf(out, "%s (input hidden): ", label)
+	} else {
+		_, _ = fmt.Fprintf(out, "%s [saved; Enter keeps it, type a replacement; input hidden]: ", label)
+	}
+	var value string
+	var err error
+	if interactive {
+		password, readErr := term.ReadPassword(int(os.Stdin.Fd()))
+		_, _ = fmt.Fprintln(out)
+		value = string(password)
+		err = readErr
+	} else {
+		value, err = r.ReadString('\n')
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		value = current
+	}
+	if value == "" {
 		return "", fmt.Errorf("%s is required", label)
 	}
 	return value, nil

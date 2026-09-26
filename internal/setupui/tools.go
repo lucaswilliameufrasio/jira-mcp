@@ -17,16 +17,20 @@ var (
 )
 
 type toolsModel struct {
-	title    string
-	choices  []string
-	selected map[string]bool
-	cursor   int
-	result   []string
-	canceled bool
+	title      string
+	choices    []string
+	selected   map[string]bool
+	cursor     int
+	result     []string
+	canceled   bool
+	allowEmpty bool
 }
 
 // SelectTools runs the interactive final-state selector for enabled tools.
 func SelectTools(in io.Reader, out io.Writer, choices, current []string) ([]string, error) {
+	if len(current) == 0 {
+		current = choices
+	}
 	result, err := SelectMany(in, out, "Select enabled tools", choices, current)
 	if err != nil {
 		return nil, err
@@ -39,18 +43,18 @@ func SelectTools(in io.Reader, out io.Writer, choices, current []string) ([]stri
 
 // SelectMany presents a reusable multi-choice selector.
 func SelectMany(in io.Reader, out io.Writer, title string, choices, current []string) ([]string, error) {
-	selected := make(map[string]bool, len(current))
-	if len(current) == 0 {
-		for _, choice := range choices {
-			selected[choice] = true
-		}
-	} else {
-		for _, choice := range current {
-			selected[choice] = true
-		}
-	}
+	return selectMany(in, out, title, choices, current, false)
+}
 
-	model := toolsModel{title: title, choices: choices, selected: selected}
+// SelectManyAllowEmpty presents a multi-choice selector where an empty final
+// selection can be confirmed. Use this for optional client registrations.
+func SelectManyAllowEmpty(in io.Reader, out io.Writer, title string, choices, current []string) ([]string, error) {
+	return selectMany(in, out, title, choices, current, true)
+}
+
+func selectMany(in io.Reader, out io.Writer, title string, choices, current []string, allowEmpty bool) ([]string, error) {
+	selected := selectedChoices(current)
+	model := toolsModel{title: title, choices: choices, selected: selected, allowEmpty: allowEmpty}
 	program := tea.NewProgram(model, tea.WithInput(in), tea.WithOutput(out))
 	final, err := program.Run()
 	if err != nil {
@@ -61,6 +65,14 @@ func SelectMany(in io.Reader, out io.Writer, title string, choices, current []st
 		return nil, ErrCanceled
 	}
 	return result.result, nil
+}
+
+func selectedChoices(current []string) map[string]bool {
+	selected := make(map[string]bool, len(current))
+	for _, choice := range current {
+		selected[choice] = true
+	}
+	return selected
 }
 
 func (m toolsModel) Init() tea.Cmd { return nil }
@@ -92,7 +104,7 @@ func (m toolsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "enter":
 			m.result = m.selection()
-			if len(m.result) > 0 {
+			if len(m.result) > 0 || m.allowEmpty {
 				return m, tea.Quit
 			}
 		case "esc", "ctrl+c":

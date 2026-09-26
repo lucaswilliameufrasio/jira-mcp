@@ -3,6 +3,7 @@ package config
 import (
 	"bufio"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,6 +33,17 @@ func TestToJiraConfigRejectsMissingCredentials(t *testing.T) {
 		if _, err := toJiraConfig(input); err == nil {
 			t.Fatalf("expected error for %+v", input)
 		}
+	}
+}
+
+func TestNormalizeDeploymentAcceptsCommonDataCenterNames(t *testing.T) {
+	for _, value := range []string{"server", "Data Center", "data-center", "datacenter", "dc"} {
+		if got := normalizeDeployment(value); got != "server" {
+			t.Errorf("normalizeDeployment(%q) = %q, want server", value, got)
+		}
+	}
+	if got := normalizeDeployment(" CLOUD "); got != "cloud" {
+		t.Fatalf("normalizeDeployment(cloud) = %q", got)
 	}
 }
 
@@ -86,7 +98,8 @@ func TestRunSetupWritesPrivateConfig(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", root)
 	input := strings.NewReader("https://jira.example\ncloud\nuser@example.com\nsecret\n\n")
-	if err := RunSetup(input, &strings.Builder{}); err != nil {
+	output := &strings.Builder{}
+	if err := RunSetup(input, output); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(Path())
@@ -102,6 +115,9 @@ func TestRunSetupWritesPrivateConfig(t *testing.T) {
 	}
 	if loaded.APIToken != "secret" || len(loaded.Tools) == 0 {
 		t.Fatalf("unexpected saved config: %+v", loaded)
+	}
+	if !strings.Contains(output.String(), "none are preselected") {
+		t.Fatalf("setup did not explain client selection defaults: %s", output.String())
 	}
 }
 
@@ -120,19 +136,23 @@ func TestRunSetupKeepsToolsOnEnter(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Re-run editing only the email; pressing Enter echoes the prompt default
-	// (the full joined tool list), which must parse back unchanged.
+	// Re-run editing only the email; pressing Enter keeps the saved secret and
+	// the full tool list without revealing the secret in the prompt.
 	joined := strings.Join(seed.Tools, ",")
-	input := strings.NewReader("https://jira.example\ncloud\nnew@example.com\nnew-token\n\n")
-	if err := RunSetup(input, &strings.Builder{}); err != nil {
+	input := strings.NewReader("https://jira.example\ncloud\nnew@example.com\n\n\n")
+	output := &strings.Builder{}
+	if err := RunSetup(input, output); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Email != "new@example.com" || loaded.APIToken != "new-token" {
+	if loaded.Email != "new@example.com" || loaded.APIToken != "old-token" {
 		t.Fatalf("credentials not updated: %+v", loaded)
+	}
+	if strings.Contains(output.String(), "old-token") {
+		t.Fatal("setup output exposed the saved API token")
 	}
 	if strings.Join(loaded.Tools, ",") != joined {
 		t.Fatalf("tools not preserved: %v", loaded.Tools)
@@ -217,7 +237,54 @@ func TestAddToOpenCodePreservesConfigAndWritesMCPServer(t *testing.T) {
 		t.Fatalf("unexpected jira server: %v", jira)
 	}
 	environment := jira["environment"].(map[string]any)
-	if environment["JIRA_API_TOKEN"] != "secret" {
-		t.Fatalf("credentials were not written: %v", environment)
+	if _, exists := environment["JIRA_API_TOKEN"]; exists {
+		t.Fatalf("API token must not be copied into client config: %v", environment)
+	}
+	if environment["JIRA_MCP_PROFILE"] != "" {
+		t.Fatalf("unexpected profile value: %v", environment)
+	}
+}
+
+func TestAskSecretRetainsAndReplacesSavedValueWithoutPrintingIt(t *testing.T) {
+	output := &strings.Builder{}
+	retained, err := askSecret(bufio.NewReader(strings.NewReader("\n")), output, "API token", "saved-secret", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retained != "saved-secret" {
+		t.Fatalf("retained token = %q", retained)
+	}
+	if strings.Contains(output.String(), "saved-secret") {
+		t.Fatal("secret prompt exposed the saved token")
+	}
+
+	replacement, err := askSecret(bufio.NewReader(strings.NewReader("new-secret\n")), io.Discard, "API token", "saved-secret", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacement != "new-secret" {
+		t.Fatalf("replacement token = %q", replacement)
+	}
+}
+
+func TestServerEntryReferencesProfileInsteadOfCopyingCredentials(t *testing.T) {
+	entry := serverEntry("claude", File{
+		ActiveProfile:       "jira.example",
+		BaseURL:             "https://jira.example",
+		Deployment:          "cloud",
+		Email:               "person@example.com",
+		APIToken:            "must-not-leak",
+		PersonalAccessToken: "also-must-not-leak",
+	})
+	environment := entry["env"].(map[string]string)
+	if environment["JIRA_MCP_PROFILE"] != "jira.example" {
+		t.Fatalf("profile not configured: %v", environment)
+	}
+	encoded, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "must-not-leak") || strings.Contains(string(encoded), "person@example.com") {
+		t.Fatalf("client config contains credentials: %s", encoded)
 	}
 }
