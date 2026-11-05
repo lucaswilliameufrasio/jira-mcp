@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -27,9 +28,23 @@ func TextHandler(fn func(arguments json.RawMessage) (string, error)) ToolHandler
 }
 
 type Server struct {
-	inner   *sdk.Server
-	logger  *log.Logger
-	enabled map[string]bool
+	inner    *sdk.Server
+	logger   *log.Logger
+	enabled  map[string]bool
+	observer func(ToolEvent)
+}
+
+// ToolEvent intentionally excludes arguments, results and error messages.
+type ToolEvent struct {
+	Tool      string        `json:"tool"`
+	StartedAt time.Time     `json:"started_at"`
+	Duration  time.Duration `json:"duration_ns"`
+	Success   bool          `json:"success"`
+}
+
+// SetObserver configures a metadata-only observer before tools are registered.
+func (s *Server) SetObserver(observer func(ToolEvent)) {
+	s.observer = observer
 }
 
 func NewServer(name, version string) *Server {
@@ -54,6 +69,13 @@ func (s *Server) RegisterTool(def Tool, handler ToolHandler) {
 		Description: def.Description,
 		InputSchema: InputSchema{Type: def.InputSchema.Type, Properties: def.InputSchema.Properties, Required: def.InputSchema.Required},
 	}, func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
+		started := time.Now().UTC()
+		success := false
+		defer func() {
+			if s.observer != nil {
+				s.observer(ToolEvent{Tool: def.Name, StartedAt: started, Duration: time.Since(started), Success: success})
+			}
+		}()
 		content, err := handler(req.Params.Arguments)
 		if err != nil {
 			return &sdk.CallToolResult{
@@ -70,6 +92,7 @@ func (s *Server) RegisterTool(def Tool, handler ToolHandler) {
 			}
 			converted = append(converted, convertedBlock)
 		}
+		success = true
 		return &sdk.CallToolResult{Content: converted}, nil
 	})
 }

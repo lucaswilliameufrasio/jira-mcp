@@ -27,8 +27,10 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"jira-mcp/internal/audit"
 	"jira-mcp/internal/config"
 	"jira-mcp/internal/jira"
+	"jira-mcp/internal/localconsole"
 	"jira-mcp/internal/mcp"
 	"jira-mcp/internal/remote"
 	"jira-mcp/internal/tools"
@@ -89,12 +91,56 @@ func main() {
 
 	client := jira.NewClient(cfg)
 	server := mcp.NewServerWithTools("jira-mcp", version, enabled)
+	retention, err := audit.ParseRetention(strings.TrimSpace(os.Getenv("JIRA_MCP_AUDIT_RETENTION")))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "[jira-mcp] audit configuration error:", err)
+		os.Exit(1)
+	}
+	auditDir, err := audit.DefaultDirectory()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "[jira-mcp] audit directory unavailable")
+		os.Exit(1)
+	}
+	auditStore, err := audit.NewFileStore(auditDir, retention)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "[jira-mcp] audit store unavailable")
+		os.Exit(1)
+	}
+	server.SetObserver(func(event mcp.ToolEvent) {
+		if err := auditStore.Append(context.Background(), "local", event); err != nil {
+			fmt.Fprintln(os.Stderr, "[jira-mcp] audit event could not be stored")
+		}
+	})
 	tools.Register(server, client)
+	var web *localconsole.Server
+	if raw := strings.TrimSpace(os.Getenv("JIRA_MCP_WEB")); raw != "" {
+		enabled, parseErr := strconv.ParseBool(raw)
+		if parseErr != nil {
+			fmt.Fprintln(os.Stderr, "[jira-mcp] JIRA_MCP_WEB must be true or false")
+			os.Exit(1)
+		}
+		if enabled {
+			web, err = localconsole.Start(auditStore, func(error) {
+				fmt.Fprintln(os.Stderr, "[jira-mcp] local console stopped unexpectedly")
+			})
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "[jira-mcp] local console could not start")
+				os.Exit(1)
+			}
+			fmt.Fprintf(os.Stderr, "[jira-mcp] local console: %s\n", web.URL)
+		}
+	}
 
 	server.Logf("starting jira-mcp %s (deployment=%s, base_url=%s)", version, cfg.Deployment, cfg.BaseURL)
 
-	if err := server.Run(context.Background()); err != nil {
-		fmt.Fprintln(os.Stderr, "[jira-mcp] fatal error:", err)
+	runErr := server.Run(context.Background())
+	if web != nil {
+		if err := web.Close(); err != nil {
+			fmt.Fprintln(os.Stderr, "[jira-mcp] local console could not close cleanly")
+		}
+	}
+	if runErr != nil {
+		fmt.Fprintln(os.Stderr, "[jira-mcp] fatal error:", runErr)
 		os.Exit(1)
 	}
 }
@@ -207,11 +253,19 @@ func joinErrors(first, second error) error {
 }
 
 func runRemote() error {
+	retention, err := audit.ParseRetention(strings.TrimSpace(os.Getenv("JIRA_MCP_AUDIT_RETENTION")))
+	if err != nil {
+		return err
+	}
 	store, err := remote.NewValkeyStore(strings.TrimSpace(os.Getenv("VALKEY_URL")))
 	if err != nil {
 		return err
 	}
 	defer store.Close()
+	auditStore, err := remote.NewValkeyAuditStore(store, retention)
+	if err != nil {
+		return err
+	}
 	key, err := remote.EncryptionKeyFromEnv()
 	if err != nil {
 		return err
@@ -231,6 +285,7 @@ func runRemote() error {
 		AtlassianAuthURL: strings.TrimSpace(os.Getenv("JIRA_MCP_ATLASSIAN_AUTH_URL")),
 		AtlassianAPIURL:  strings.TrimSpace(os.Getenv("JIRA_MCP_ATLASSIAN_API_URL")),
 		Store:            store,
+		Audit:            auditStore,
 		EncryptionKey:    key,
 		RateLimitRPS:     rateLimit,
 	})

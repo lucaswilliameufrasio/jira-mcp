@@ -10,6 +10,50 @@ import (
 	"testing"
 )
 
+func TestSetAndUnlinkIssueParent(t *testing.T) {
+	var updates []map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/editmeta"):
+			_ = json.NewEncoder(w).Encode(EditMetadata{Fields: map[string]FieldMetadata{
+				"parent": {Name: "Parent", Operations: []string{"set"}},
+			}})
+		case r.Method == http.MethodGet && r.URL.Path == "/rest/api/3/issue/TEST-1":
+			_, _ = w.Write([]byte(`{"key":"TEST-1","fields":{"parent":{"key":"TEST-9"}}}`))
+		case r.Method == http.MethodPut && r.URL.Path == "/rest/api/3/issue/TEST-1":
+			var body struct {
+				Fields map[string]interface{} `json:"fields"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			updates = append(updates, body.Fields)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	client := NewClient(Config{BaseURL: server.URL, Deployment: DeploymentCloud, BearerToken: "test-token"})
+	if err := client.SetIssueParent("TEST-1", "TEST-9"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.UnlinkIssueParent("TEST-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(updates) != 2 {
+		t.Fatalf("updates = %#v", updates)
+	}
+	parent, ok := updates[0]["parent"].(map[string]interface{})
+	if !ok || parent["key"] != "TEST-9" {
+		t.Fatalf("link update = %#v", updates[0])
+	}
+	if value, ok := updates[1]["parent"]; !ok || value != nil {
+		t.Fatalf("unlink update = %#v", updates[1])
+	}
+}
+
 func TestSearchIssuesCloudUsesEnhancedEndpointAndBasicAuth(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/rest/api/3/search/jql" {

@@ -545,6 +545,58 @@ func (c *Client) SetIssueEpic(issueKey, epicKey string) error {
 	return fmt.Errorf("issue %s has no editable parent or Epic Link field", issueKey)
 }
 
+// SetIssueParent links an issue to a parent, using the legacy Epic Link only
+// when parent is unavailable and the requested parent is an Epic.
+func (c *Client) SetIssueParent(issueKey, parentKey string) error {
+	if strings.TrimSpace(issueKey) == "" || strings.TrimSpace(parentKey) == "" {
+		return fmt.Errorf("issue key and parent key are required")
+	}
+	metadata, err := c.GetFieldMetadata(issueKey)
+	if err != nil {
+		return err
+	}
+	if field, ok := metadata.Fields["parent"]; ok && supportsSet(field) {
+		return c.UpdateIssue(issueKey, map[string]interface{}{"parent": map[string]string{"key": parentKey}})
+	}
+	return c.SetIssueEpic(issueKey, parentKey)
+}
+
+// UnlinkIssueParent clears the actual parent relationship without deleting the issue.
+func (c *Client) UnlinkIssueParent(issueKey string) error {
+	if strings.TrimSpace(issueKey) == "" {
+		return fmt.Errorf("issue key is required")
+	}
+	hierarchy, err := c.GetIssueHierarchy(issueKey)
+	if err != nil {
+		return err
+	}
+	metadata, err := c.GetFieldMetadata(issueKey)
+	if err != nil {
+		return err
+	}
+	fieldKey := "parent"
+	if hierarchy.ParentKey == "" {
+		if hierarchy.EpicKey == "" || hierarchy.EpicField == "" {
+			return fmt.Errorf("issue %s has no parent relationship", issueKey)
+		}
+		fieldKey = hierarchy.EpicField
+	}
+	field, ok := metadata.Fields[fieldKey]
+	if !ok || !supportsSet(field) {
+		return fmt.Errorf("field %s is not editable", fieldKey)
+	}
+	return c.UpdateIssue(issueKey, map[string]interface{}{fieldKey: nil})
+}
+
+// DeleteIssue deletes only the requested issue. Jira rejects issues with
+// subtasks unless the caller handles those explicitly first.
+func (c *Client) DeleteIssue(issueKey string) error {
+	if strings.TrimSpace(issueKey) == "" {
+		return fmt.Errorf("issue key is required")
+	}
+	return c.doJSON(http.MethodDelete, c.apiPath("/issue/"+url.PathEscape(issueKey)), nil, nil, nil)
+}
+
 // GetIssueHierarchy returns the parent and Epic relationship currently visible
 // for an issue, supporting both current parent and legacy Epic Link fields.
 func (c *Client) GetIssueHierarchy(issueKey string) (*IssueHierarchy, error) {
@@ -843,8 +895,12 @@ func validateCreateFields(projectKey, issueType string, metadata map[string]Fiel
 }
 
 // AddComment posts a plain-text comment to an issue.
-func (c *Client) AddComment(issueKey, comment string) error {
-	body := map[string]interface{}{"body": c.encodeDescription(comment)}
+func (c *Client) AddComment(issueKey string, comment interface{}) error {
+	value, err := c.commentBody(comment)
+	if err != nil {
+		return err
+	}
+	body := map[string]interface{}{"body": value}
 	return c.doJSON(http.MethodPost, c.apiPath("/issue/"+url.PathEscape(issueKey)+"/comment"), nil, body, nil)
 }
 
@@ -881,14 +937,39 @@ func (c *Client) ListComments(issueKey string, maxResults, startAt int, orderBy 
 }
 
 // UpdateComment replaces the body of an existing comment.
-func (c *Client) UpdateComment(issueKey, commentID, comment string) (*Comment, error) {
-	body := map[string]interface{}{"body": c.encodeDescription(comment)}
+func (c *Client) UpdateComment(issueKey, commentID string, comment interface{}) (*Comment, error) {
+	value, err := c.commentBody(comment)
+	if err != nil {
+		return nil, err
+	}
+	body := map[string]interface{}{"body": value}
 	var out Comment
 	path := c.apiPath("/issue/" + url.PathEscape(issueKey) + "/comment/" + url.PathEscape(commentID))
 	if err := c.doJSON(http.MethodPut, path, nil, body, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
+}
+
+func (c *Client) commentBody(comment interface{}) (interface{}, error) {
+	switch value := comment.(type) {
+	case string:
+		if strings.TrimSpace(value) == "" {
+			return nil, fmt.Errorf("comment must not be empty")
+		}
+		return c.encodeDescription(value), nil
+	case map[string]interface{}:
+		if c.cfg.Deployment == DeploymentServer {
+			return nil, fmt.Errorf("ADF comments require Jira Cloud")
+		}
+		content, ok := value["content"].([]interface{})
+		if value["type"] != "doc" || value["version"] != float64(1) || !ok || len(content) == 0 {
+			return nil, fmt.Errorf("comment must be an ADF document with type doc, version 1 and nonempty content")
+		}
+		return value, nil
+	default:
+		return nil, fmt.Errorf("comment must be text or an ADF document")
+	}
 }
 
 // ListTransitions returns the workflow transitions currently available for

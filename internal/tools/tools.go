@@ -107,6 +107,30 @@ func Register(s *mcp.Server, client *jira.Client) {
 	}, mcp.TextHandler(handleGetIssueHierarchy(client)))
 
 	s.RegisterTool(mcp.Tool{
+		Name: "jira_link_issue_parent", Description: "Vincula uma issue a um pai, incluindo épico ou iniciativa, sujeito às regras do Jira.",
+		InputSchema: mcp.InputSchema{Type: "object", Properties: map[string]interface{}{
+			"issue_key":  map[string]interface{}{"type": "string", "description": "Issue filha."},
+			"parent_key": map[string]interface{}{"type": "string", "description": "Issue pai."},
+		}, Required: []string{"issue_key", "parent_key"}},
+	}, mcp.TextHandler(handleLinkIssueParent(client)))
+	s.RegisterTool(mcp.Tool{
+		Name: "jira_unlink_issue_parent", Description: "Desvincula a issue de seu pai sem excluí-la.",
+		InputSchema: mcp.InputSchema{Type: "object", Properties: map[string]interface{}{"issue_key": map[string]interface{}{"type": "string"}}, Required: []string{"issue_key"}},
+	}, mcp.TextHandler(handleUnlinkIssueParent(client)))
+	s.RegisterTool(mcp.Tool{
+		Name: "jira_delete_issue", Description: "Exclui definitivamente uma issue do Jira. Use somente quando a exclusão for explicitamente solicitada; não exclui subtarefas automaticamente.",
+		InputSchema: mcp.InputSchema{Type: "object", Properties: map[string]interface{}{"issue_key": map[string]interface{}{"type": "string"}, "confirm": map[string]interface{}{"type": "boolean", "description": "Deve ser true após solicitação explícita de exclusão."}}, Required: []string{"issue_key", "confirm"}},
+	}, mcp.TextHandler(handleDeleteIssue(client)))
+	s.RegisterTool(mcp.Tool{
+		Name: "jira_list_issue_children", Description: "Lista issues filhas diretas de um épico, iniciativa ou outra issue pai usando JQL; a disponibilidade depende do Jira.",
+		InputSchema: mcp.InputSchema{Type: "object", Properties: map[string]interface{}{
+			"parent_key":  map[string]interface{}{"type": "string"},
+			"max_results": map[string]interface{}{"type": "integer"},
+			"page_token":  map[string]interface{}{"type": "string", "description": "Token de página para Jira Cloud."},
+		}, Required: []string{"parent_key"}},
+	}, mcp.TextHandler(handleListIssueChildren(client)))
+
+	s.RegisterTool(mcp.Tool{
 		Name:        "jira_create_issue",
 		Description: "Cria uma nova issue no Jira.",
 		InputSchema: mcp.InputSchema{
@@ -162,12 +186,12 @@ func Register(s *mcp.Server, client *jira.Client) {
 
 	s.RegisterTool(mcp.Tool{
 		Name:        "jira_add_comment",
-		Description: "Adiciona um comentário de texto simples a uma issue.",
+		Description: "Adiciona comentário de texto ou documento ADF no Jira Cloud, incluindo menções.",
 		InputSchema: mcp.InputSchema{
 			Type: "object",
 			Properties: map[string]interface{}{
 				"issue_key": map[string]interface{}{"type": "string", "description": "Chave ou ID da issue."},
-				"comment":   map[string]interface{}{"type": "string", "description": "Texto do comentário."},
+				"comment":   map[string]interface{}{"anyOf": []interface{}{map[string]interface{}{"type": "string"}, map[string]interface{}{"type": "object"}}, "description": "Texto ou documento ADF (Cloud)."},
 			},
 			Required: []string{"issue_key", "comment"},
 		},
@@ -203,13 +227,13 @@ func Register(s *mcp.Server, client *jira.Client) {
 
 	s.RegisterTool(mcp.Tool{
 		Name:        "jira_update_comment",
-		Description: "Atualiza o texto de um comentário existente.",
+		Description: "Atualiza comentário com texto ou documento ADF no Jira Cloud.",
 		InputSchema: mcp.InputSchema{
 			Type: "object",
 			Properties: map[string]interface{}{
 				"issue_key":  map[string]interface{}{"type": "string", "description": "Chave ou ID da issue."},
 				"comment_id": map[string]interface{}{"type": "string", "description": "ID do comentário."},
-				"comment":    map[string]interface{}{"type": "string", "description": "Novo texto do comentário."},
+				"comment":    map[string]interface{}{"anyOf": []interface{}{map[string]interface{}{"type": "string"}, map[string]interface{}{"type": "object"}}, "description": "Texto ou documento ADF (Cloud)."},
 			},
 			Required: []string{"issue_key", "comment_id", "comment"},
 		},
@@ -477,7 +501,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 
 func AvailableToolNames() []string {
 	return []string{
-		"jira_search", "jira_get_issue", "jira_get_field_metadata", "jira_set_issue_epic", "jira_get_issue_hierarchy", "jira_create_issue", "jira_update_issue",
+		"jira_search", "jira_get_issue", "jira_get_field_metadata", "jira_set_issue_epic", "jira_get_issue_hierarchy", "jira_link_issue_parent", "jira_unlink_issue_parent", "jira_list_issue_children", "jira_delete_issue", "jira_create_issue", "jira_update_issue",
 		"jira_add_comment", "jira_get_comment", "jira_list_comments", "jira_update_comment", "jira_list_transitions", "jira_transition_issue",
 		"jira_list_issue_link_types", "jira_list_issue_links", "jira_create_issue_link",
 		"jira_update_issue_link", "jira_delete_issue_link",
@@ -526,14 +550,14 @@ type updateIssueArgs struct {
 }
 
 type addCommentArgs struct {
-	IssueKey string `json:"issue_key"`
-	Comment  string `json:"comment"`
+	IssueKey string      `json:"issue_key"`
+	Comment  interface{} `json:"comment"`
 }
 
 type commentArgs struct {
-	IssueKey  string `json:"issue_key"`
-	CommentID string `json:"comment_id"`
-	Comment   string `json:"comment"`
+	IssueKey  string      `json:"issue_key"`
+	CommentID string      `json:"comment_id"`
+	Comment   interface{} `json:"comment"`
 }
 
 type listCommentsArgs struct {
@@ -581,6 +605,75 @@ type issueRankArgs struct {
 var defaultIssueFields = []string{"summary", "status", "issuetype", "assignee", "reporter", "priority", "updated"}
 
 // --- handlers ---
+
+func handleListIssueChildren(client *jira.Client) func(json.RawMessage) (string, error) {
+	return func(raw json.RawMessage) (string, error) {
+		var args struct {
+			ParentKey  string `json:"parent_key"`
+			MaxResults int    `json:"max_results"`
+			PageToken  string `json:"page_token"`
+		}
+		if err := unmarshal(raw, &args); err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(args.ParentKey) == "" {
+			return "", fmt.Errorf("o parâmetro 'parent_key' é obrigatório")
+		}
+		result, err := client.SearchIssues("parent = "+strconv.Quote(args.ParentKey), args.MaxResults, []string{"*all"}, args.PageToken)
+		if err != nil {
+			return "", friendlyError(err)
+		}
+		return formatSearchResult(result), nil
+	}
+}
+
+func handleLinkIssueParent(client *jira.Client) func(json.RawMessage) (string, error) {
+	return func(raw json.RawMessage) (string, error) {
+		var args struct {
+			IssueKey  string `json:"issue_key"`
+			ParentKey string `json:"parent_key"`
+		}
+		if err := unmarshal(raw, &args); err != nil {
+			return "", err
+		}
+		if err := client.SetIssueParent(args.IssueKey, args.ParentKey); err != nil {
+			return "", friendlyError(err)
+		}
+		return fmt.Sprintf("Issue %s vinculada a %s.", args.IssueKey, args.ParentKey), nil
+	}
+}
+
+func handleUnlinkIssueParent(client *jira.Client) func(json.RawMessage) (string, error) {
+	return func(raw json.RawMessage) (string, error) {
+		var args getIssueArgs
+		if err := unmarshal(raw, &args); err != nil {
+			return "", err
+		}
+		if err := client.UnlinkIssueParent(args.IssueKey); err != nil {
+			return "", friendlyError(err)
+		}
+		return fmt.Sprintf("Issue %s desvinculada do pai.", args.IssueKey), nil
+	}
+}
+
+func handleDeleteIssue(client *jira.Client) func(json.RawMessage) (string, error) {
+	return func(raw json.RawMessage) (string, error) {
+		var args struct {
+			IssueKey string `json:"issue_key"`
+			Confirm  bool   `json:"confirm"`
+		}
+		if err := unmarshal(raw, &args); err != nil {
+			return "", err
+		}
+		if !args.Confirm {
+			return "", fmt.Errorf("exclusão definitiva exige confirm=true")
+		}
+		if err := client.DeleteIssue(args.IssueKey); err != nil {
+			return "", friendlyError(err)
+		}
+		return fmt.Sprintf("Issue %s excluída definitivamente.", args.IssueKey), nil
+	}
+}
 
 func handleSearch(client *jira.Client) func(json.RawMessage) (string, error) {
 	return func(raw json.RawMessage) (string, error) {
@@ -781,7 +874,7 @@ func handleAddComment(client *jira.Client) func(json.RawMessage) (string, error)
 		if err := unmarshal(raw, &args); err != nil {
 			return "", err
 		}
-		if args.IssueKey == "" || strings.TrimSpace(args.Comment) == "" {
+		if strings.TrimSpace(args.IssueKey) == "" || args.Comment == nil {
 			return "", fmt.Errorf("'issue_key' e 'comment' são obrigatórios")
 		}
 		if err := client.AddComment(args.IssueKey, args.Comment); err != nil {
@@ -843,7 +936,7 @@ func handleUpdateComment(client *jira.Client) func(json.RawMessage) (string, err
 		if err := unmarshal(raw, &args); err != nil {
 			return "", err
 		}
-		if strings.TrimSpace(args.IssueKey) == "" || strings.TrimSpace(args.CommentID) == "" || strings.TrimSpace(args.Comment) == "" {
+		if strings.TrimSpace(args.IssueKey) == "" || strings.TrimSpace(args.CommentID) == "" || args.Comment == nil {
 			return "", fmt.Errorf("'issue_key', 'comment_id' e 'comment' são obrigatórios")
 		}
 		comment, err := client.UpdateComment(args.IssueKey, args.CommentID, args.Comment)

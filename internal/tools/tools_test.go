@@ -10,6 +10,91 @@ import (
 	"jira-mcp/internal/jira"
 )
 
+func TestRichCommentMentionAndServerRejection(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var body struct {
+			Body map[string]interface{} `json:"body"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		encoded, _ := json.Marshal(body.Body)
+		if !strings.Contains(string(encoded), `"type":"mention"`) || !strings.Contains(string(encoded), `"id":"account-123"`) {
+			t.Errorf("mention lost: %s", encoded)
+		}
+		if r.Method == http.MethodPut {
+			_, _ = w.Write([]byte(`{"id":"1","body":"ok"}`))
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer server.Close()
+	adf := `{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"mention","attrs":{"id":"account-123","text":"@Example"}}]}]}`
+	client := jira.NewClient(jira.Config{BaseURL: server.URL, Deployment: jira.DeploymentCloud, BearerToken: "test-token"})
+	if _, err := handleAddComment(client)(json.RawMessage(`{"issue_key":"TEST-1","comment":` + adf + `}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := handleUpdateComment(client)(json.RawMessage(`{"issue_key":"TEST-1","comment_id":"1","comment":` + adf + `}`)); err != nil {
+		t.Fatal(err)
+	}
+	serverClient := jira.NewClient(jira.Config{BaseURL: server.URL, Deployment: jira.DeploymentServer})
+	if _, err := handleAddComment(serverClient)(json.RawMessage(`{"issue_key":"TEST-1","comment":` + adf + `}`)); err == nil {
+		t.Fatal("expected Server/Data Center to reject ADF")
+	}
+	if _, err := handleAddComment(client)(json.RawMessage(`{"issue_key":"TEST-1","comment":{"type":"doc"}}`)); err == nil {
+		t.Fatal("expected invalid ADF to fail")
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d, want 2", requests)
+	}
+}
+
+func TestDeleteIssueRequiresConfirmation(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.Method != http.MethodDelete || r.URL.Path != "/rest/api/3/issue/TEST-1" || r.URL.RawQuery != "" {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	client := jira.NewClient(jira.Config{BaseURL: server.URL, Deployment: jira.DeploymentCloud, BearerToken: "test-token"})
+	if _, err := handleDeleteIssue(client)(json.RawMessage(`{"issue_key":"TEST-1"}`)); err == nil {
+		t.Fatal("delete without confirmation succeeded")
+	}
+	if _, err := handleDeleteIssue(client)(json.RawMessage(`{"issue_key":"TEST-1","confirm":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d", requests)
+	}
+}
+
+func TestListIssueChildrenUsesParentJQL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/rest/api/3/search/jql" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["jql"] != `parent = "TEST-1"` || body["nextPageToken"] != "next" {
+			t.Fatalf("search request = %#v", body)
+		}
+		_, _ = w.Write([]byte(`{"issues":[{"key":"TEST-2","fields":{"summary":"Child"}}],"isLast":true}`))
+	}))
+	defer server.Close()
+	client := jira.NewClient(jira.Config{BaseURL: server.URL, Deployment: jira.DeploymentCloud, BearerToken: "test-token"})
+	got, err := handleListIssueChildren(client)(json.RawMessage(`{"parent_key":"TEST-1","page_token":"next"}`))
+	if err != nil || !strings.Contains(got, "TEST-2") {
+		t.Fatalf("result %q, error %v", got, err)
+	}
+}
+
 func TestFormatIssueIncludesCustomFields(t *testing.T) {
 	got := formatIssue(&jira.Issue{
 		Key: "TEST-1",

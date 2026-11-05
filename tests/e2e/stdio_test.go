@@ -10,12 +10,43 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"jira-mcp/internal/audit"
 )
+
+type consoleLogCapture struct {
+	mu      sync.Mutex
+	buffer  string
+	address chan string
+}
+
+func (c *consoleLogCapture) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.buffer += string(p)
+	for {
+		line, rest, found := strings.Cut(c.buffer, "\n")
+		if !found {
+			break
+		}
+		c.buffer = rest
+		const prefix = "[jira-mcp] local console: "
+		if strings.HasPrefix(line, prefix) {
+			select {
+			case c.address <- strings.TrimPrefix(line, prefix):
+			default:
+			}
+		}
+	}
+	return len(p), nil
+}
 
 func TestBinaryVersionExitsImmediately(t *testing.T) {
 	binary := os.Getenv("JIRA_MCP_BINARY")
@@ -74,7 +105,10 @@ func TestBinarySpeaksMCPOverStdio(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	cmd := exec.Command(binary)
-	cmd.Env = append(os.Environ(), "JIRA_BASE_URL="+fakeJira.URL, "JIRA_DEPLOYMENT=cloud", "JIRA_EMAIL=e2e@example.com", "JIRA_API_TOKEN=e2e-token", "XDG_CONFIG_HOME="+t.TempDir())
+	stateDir := t.TempDir()
+	cmd.Env = append(os.Environ(), "JIRA_BASE_URL="+fakeJira.URL, "JIRA_DEPLOYMENT=cloud", "JIRA_EMAIL=e2e@example.com", "JIRA_API_TOKEN=e2e-token", "XDG_CONFIG_HOME="+t.TempDir(), "XDG_STATE_HOME="+stateDir, "JIRA_MCP_WEB=true")
+	logs := &consoleLogCapture{address: make(chan string, 1)}
+	cmd.Stderr = logs
 	client := mcp.NewClient(&mcp.Implementation{Name: "e2e-client", Version: "1.0.0"}, nil)
 	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: cmd}, nil)
 	if err != nil {
@@ -95,6 +129,39 @@ func TestBinarySpeaksMCPOverStdio(t *testing.T) {
 	}
 	if result.IsError || len(result.Content) == 0 {
 		t.Fatalf("tool result = %+v", result)
+	}
+	store, err := audit.NewFileStore(filepath.Join(stateDir, "jira-mcp", "audit"), audit.DefaultRetention)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := store.List(ctx, "local", 10)
+	if err != nil || len(events) != 1 || events[0].Tool != "jira_search" || !events[0].Success {
+		t.Fatalf("audit events = %#v, err = %v", events, err)
+	}
+	var address string
+	select {
+	case address = <-logs.address:
+	case <-ctx.Done():
+		t.Fatal("local console address missing from stderr")
+	}
+	if !strings.HasPrefix(address, "http://127.0.0.1:") {
+		t.Fatal("console did not bind to loopback")
+	}
+	base := strings.TrimSuffix(address, "/web/overview")
+	for _, path := range []string{"/web/overview", "/web/monitoring", "/web/audit"} {
+		response, err := http.Get(base + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var body bytes.Buffer
+		_, err = body.ReadFrom(response.Body)
+		response.Body.Close()
+		if err != nil || response.StatusCode != http.StatusOK || !strings.Contains(body.String(), "Modo local") {
+			t.Fatalf("local page %s failed", path)
+		}
+		if path == "/web/audit" && !strings.Contains(body.String(), "jira_search") {
+			t.Fatal("real MCP event not shown in local console")
+		}
 	}
 }
 

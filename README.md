@@ -19,6 +19,10 @@ Landing page e documentação: [docs-site](docs-site/README.md).
 | `jira_get_field_metadata` | Metadata dos campos editáveis, incluindo custom fields |
 | `jira_set_issue_epic` | Associa uma issue a um Epic usando a hierarquia disponível |
 | `jira_get_issue_hierarchy` | Retorna parent e Epic atuais de uma issue |
+| `jira_list_issue_children` | Lista issues filhas diretas por JQL `parent` |
+| `jira_link_issue_parent` | Vincula uma issue a um pai, incluindo épico ou iniciativa |
+| `jira_unlink_issue_parent` | Desvincula uma issue do pai sem apagá-la |
+| `jira_delete_issue` | Exclui definitivamente uma issue após confirmação explícita |
 | `jira_create_issue` | Cria uma nova issue |
 | `jira_update_issue` | Atualiza campos de uma issue existente |
 | `jira_add_comment` | Adiciona comentário a uma issue |
@@ -52,6 +56,74 @@ campos existem, aceitam a operação `set` e recebem o tipo JSON esperado. A
 tool retorna o nome legível do campo e o formato esperado quando a validação
 falha. `jira_set_issue_epic` detecta automaticamente `parent` ou o campo legado
 Epic Link; não é necessário informar o ID de um custom field.
+
+Para issues dentro de épicos ou iniciativas, use `jira_list_issue_children`,
+as tools de criação/consulta/atualização existentes, e as tools separadas de
+vinculação, desvinculação e exclusão. A exclusão exige `confirm: true` e não
+apaga subtarefas automaticamente. O Jira determina quais relações e operações
+são permitidas. A listagem usa JQL `parent`, cujo suporte depende da versão e
+configuração do Jira; no Cloud a próxima página usa `page_token`.
+
+As tools de adicionar e atualizar comentários aceitam `comment` como texto ou,
+no Jira Cloud, como documento ADF para formatação e menções. Por exemplo:
+
+```json
+{"issue_key":"PROJ-123","comment":{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"mention","attrs":{"id":"ATLASSIAN_ACCOUNT_ID","text":"@Pessoa"}}]}]}}
+```
+
+No Jira Server/Data Center, comentários continuam sendo texto simples; um ADF
+é recusado para evitar perda silenciosa de formatação ou menções.
+
+### Auditoria das tools
+
+Chamadas de tools registram apenas nome da tool, horário, duração e sucesso ou
+falha; argumentos, conteúdo de issues, respostas e erros não são armazenados.
+A retenção padrão é de 30 dias e pode ser alterada com
+`JIRA_MCP_AUDIT_RETENTION`, em duração Go, por exemplo `720h` (mínimo `1s`,
+máximo `8760h`).
+
+No modo stdio os arquivos ficam em `$XDG_STATE_HOME/jira-mcp/audit` ou,
+quando não definido, em `~/.local/state/jira-mcp/audit`, com permissões
+privadas. Arquivos vencidos são removidos na próxima leitura ou gravação;
+enquanto não houver atividade, permanecem no disco. No modo remoto os eventos
+são isolados por conta Atlassian e site, com expiração no Valkey e índice
+limitado aos 10.000 eventos mais recentes por identidade. A persistência remota
+depende da configuração de durabilidade do Valkey. Falhas posteriores de
+gravação são indicadas em stderr, sem alterar o resultado de uma operação já
+executada. Isto é auditoria operacional, não um registro imutável de compliance.
+
+### Autenticação web remota
+
+O acesso do navegador começa em `/web/login` e usa o OAuth da Atlassian e a
+seleção do site Jira. A sessão web é separada do token MCP e dura oito horas;
+seus cookies são HttpOnly e SameSite=Lax, com Secure em HTTPS. URLs públicas
+não locais precisam usar HTTPS; HTTP é aceito apenas para localhost ou IP de
+loopback. `/web/session` retorna a identidade autenticada e o token CSRF de
+sessão; `POST /web/logout` exige esse token e o cabeçalho Origin da própria
+origem. Logout da sessão web não revoga tokens MCP nem o consentimento da
+Atlassian. O proxy não deve registrar parâmetros das URLs de callback OAuth.
+
+Após o login, as páginas `/web/overview`, `/web/monitoring` e `/web/audit`
+mostram os eventos da conta e do site selecionados. Os indicadores resumem no
+máximo os 200 eventos armazenados mais recentes: não são métricas completas de
+todos os usuários, nem uma verificação da disponibilidade atual do Jira. Se o
+armazenamento estiver indisponível, as páginas informam a falha em vez de
+mostrar zero.
+
+### Console web local no stdio
+
+Defina `JIRA_MCP_WEB=true` no ambiente do processo MCP para iniciar o console
+opcional. O endereço `http://127.0.0.1:<porta>/web/overview` aparece no **stderr**
+do processo; a porta é escolhida pelo sistema e muda a cada inicialização. A
+saída stdout continua reservada ao protocolo MCP. O console para quando o
+processo stdio é encerrado.
+
+O console é somente leitura, restrito ao loopback, e rejeita hosts e origens
+inesperados. **Ele não autentica usuários locais:** qualquer processo ou usuário
+com acesso ao loopback da máquina pode consultar os metadados. Em máquinas
+compartilhadas, mantenha-o desativado ou use isolamento apropriado. A auditoria
+local reúne os perfis stdio que compartilham o mesmo diretório de estado; não é
+um filtro por conta ou site Jira.
 
 ### Sobre boards e anexos
 

@@ -56,6 +56,16 @@ func (s *memoryStore) Delete(_ context.Context, key string) error {
 	delete(s.values, key)
 	return nil
 }
+func (s *memoryStore) Take(_ context.Context, key string, value any) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	raw, ok := s.values[key]
+	if !ok {
+		return ErrNotFound
+	}
+	delete(s.values, key)
+	return json.Unmarshal(raw, value)
+}
 func (s *memoryStore) Close() {}
 
 func TestHealthEndpointIsPublic(t *testing.T) {
@@ -212,6 +222,9 @@ func TestOAuthPendingIsSingleUse(t *testing.T) {
 		Resources:             []resource{{ID: "cloud-1", URL: "https://site.example", Name: "Site"}},
 	}
 	if err := store.Put(context.Background(), "oauth:pending:test-state", pending, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put(context.Background(), "mcp:client:client", map[string]any{"redirect_uris": []string{"https://client.example/cb"}}, time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	noRedirect := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}

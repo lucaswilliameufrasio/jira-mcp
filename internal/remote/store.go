@@ -21,6 +21,11 @@ type Store interface {
 	Close()
 }
 
+// AtomicTakeStore atomically consumes a one-time record.
+type AtomicTakeStore interface {
+	Take(ctx context.Context, key string, value any) error
+}
+
 type ValkeyStore struct {
 	client valkey.Client
 }
@@ -73,6 +78,17 @@ func (s *ValkeyStore) Get(ctx context.Context, key string, value any) error {
 
 func (s *ValkeyStore) Delete(ctx context.Context, key string) error {
 	return s.client.Do(ctx, s.client.B().Del().Key(key).Build()).Error()
+}
+
+func (s *ValkeyStore) Take(ctx context.Context, key string, value any) error {
+	encoded, err := s.client.Do(ctx, s.client.B().Getdel().Key(key).Build()).ToString()
+	if err != nil {
+		if valkey.IsValkeyNil(err) {
+			return ErrNotFound
+		}
+		return err
+	}
+	return json.Unmarshal([]byte(encoded), value)
 }
 
 func (s *ValkeyStore) Close() { s.client.Close() }

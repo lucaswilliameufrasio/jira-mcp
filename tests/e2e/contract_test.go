@@ -169,14 +169,14 @@ type mcpProcess struct {
 	next int
 }
 
-func startMCP(ctx context.Context, name, binary, baseURL, deployment string) (*mcpProcess, error) {
+func startMCP(ctx context.Context, name, binary, baseURL, deployment, stateDir string) (*mcpProcess, error) {
 	cmd := exec.CommandContext(ctx, binary)
 	for _, env := range os.Environ() {
-		if !strings.HasPrefix(env, "JIRA_") {
+		if !strings.HasPrefix(env, "JIRA_") && !strings.HasPrefix(env, "XDG_STATE_HOME=") {
 			cmd.Env = append(cmd.Env, env)
 		}
 	}
-	cmd.Env = append(cmd.Env, "JIRA_BASE_URL="+baseURL, "JIRA_URL="+baseURL, "JIRA_DEPLOYMENT="+deployment)
+	cmd.Env = append(cmd.Env, "JIRA_BASE_URL="+baseURL, "JIRA_URL="+baseURL, "JIRA_DEPLOYMENT="+deployment, "XDG_STATE_HOME="+stateDir)
 	if deployment == "cloud" {
 		cmd.Env = append(cmd.Env, "JIRA_EMAIL=contract@example.com", "JIRA_API_TOKEN=cloud-token")
 	} else {
@@ -229,14 +229,14 @@ func (p *mcpProcess) call(method string, params any) (map[string]any, error) {
 	return response, nil
 }
 
-func validate(binary, deployment string) error {
+func validate(binary, deployment, stateDir string) error {
 	fake := newFakeJira()
 	defer fake.close()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
 	name := binary
-	p, err := startMCP(ctx, name, binary, fake.server.URL, deployment)
+	p, err := startMCP(ctx, name, binary, fake.server.URL, deployment, stateDir)
 	if err != nil {
 		return err
 	}
@@ -288,12 +288,12 @@ func validate(binary, deployment string) error {
 	return nil
 }
 
-func benchmark(binary string) error {
+func benchmark(binary, stateDir string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	fake := newFakeJira()
 	defer fake.close()
-	p, err := startMCP(ctx, binary, binary, fake.server.URL, "cloud")
+	p, err := startMCP(ctx, binary, binary, fake.server.URL, "cloud", stateDir)
 	if err != nil {
 		return err
 	}
@@ -324,7 +324,7 @@ func TestMCPJiraContract(t *testing.T) {
 	}
 	for _, deployment := range []string{"cloud", "server"} {
 		t.Run(deployment, func(t *testing.T) {
-			if err := validate(binary, deployment); err != nil {
+			if err := validate(binary, deployment, t.TempDir()); err != nil {
 				t.Fatal(err)
 			}
 		})

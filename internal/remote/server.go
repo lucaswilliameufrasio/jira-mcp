@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"jira-mcp/internal/audit"
 	"jira-mcp/internal/jira"
 	"jira-mcp/internal/mcp"
 	"jira-mcp/internal/tools"
@@ -38,6 +39,7 @@ type Config struct {
 	AtlassianAuthURL string
 	AtlassianAPIURL  string
 	Store            Store
+	Audit            audit.Store
 	EncryptionKey    []byte
 	// RateLimitRPS caps /mcp requests per client per second (burst is 2x).
 	// Zero disables limiting; production wiring defaults to 20.
@@ -128,6 +130,15 @@ func New(cfg Config) (*Server, error) {
 	s.mux.Handle("/oauth/complete", s.limit(s.oauthFlow, http.HandlerFunc(s.complete)))
 	s.mux.Handle("/oauth/token", s.limit(s.oauthFlow, http.HandlerFunc(s.token)))
 	s.mux.Handle("/oauth/revoke", s.limit(s.oauthFlow, http.HandlerFunc(s.revoke)))
+	s.mux.Handle("/web/login", s.limit(s.oauthFlow, http.HandlerFunc(s.webLogin)))
+	s.mux.Handle("/web/callback", s.limit(s.oauthFlow, http.HandlerFunc(s.webCallback)))
+	s.mux.HandleFunc("/web/session", s.webSessionInfo)
+	s.mux.HandleFunc("/web/logout", s.webLogout)
+	s.mux.HandleFunc("/web/overview", s.webOverview)
+	s.mux.HandleFunc("/web/monitoring", s.webMonitoring)
+	s.mux.HandleFunc("/web/audit", s.webAudit)
+	s.mux.HandleFunc("/web/signed-out", s.webSignedOut)
+	s.mux.HandleFunc("/web/", s.webRoot)
 	mcpHandler := mcp.NewHTTPHandler(func(req *http.Request) *mcp.Server {
 		user, ok := s.userFromRequest(req)
 		if !ok {
@@ -143,6 +154,16 @@ func New(cfg Config) (*Server, error) {
 			enabled[name] = true
 		}
 		server := mcp.NewServerWithTools("jira-mcp-remote", "1.0.0", enabled)
+		if cfg.Audit != nil {
+			identity := auditIdentity(user)
+			server.SetObserver(func(event mcp.ToolEvent) {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				if err := cfg.Audit.Append(ctx, identity, event); err != nil {
+					_, _ = fmt.Fprintln(os.Stderr, "[jira-mcp] audit event could not be stored")
+				}
+			})
+		}
 		tools.Register(server, client)
 		return server
 	})
@@ -423,8 +444,25 @@ func (s *Server) complete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userID := pending.AccountID + ":" + cloudID
+	userTTL := 90 * 24 * time.Hour
+	var browserClient struct {
+		Browser bool `json:"browser"`
+	}
+	if err := s.cfg.Store.Get(r.Context(), "mcp:client:"+pending.ClientID, &browserClient); err != nil {
+		http.Error(w, "authorization client expired", http.StatusBadRequest)
+		return
+	}
+	if browserClient.Browser {
+		browserID, err := randomToken(32)
+		if err != nil {
+			http.Error(w, "browser login unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		userID = "browser:" + browserID
+		userTTL = webSessionTTL + codeTTL
+	}
 	user := userRecord{AccountID: pending.AccountID, CloudID: cloudID, BaseURL: resourceURL, Tools: selected, AccessToken: pending.AtlassianAccessToken, RefreshToken: pending.AtlassianRefreshToken, ExpiresAt: pending.ExpiresAt}
-	if err := s.cfg.Store.Put(r.Context(), "mcp:user:"+userID, user, 90*24*time.Hour); err != nil {
+	if err := s.cfg.Store.Put(r.Context(), "mcp:user:"+userID, user, userTTL); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
