@@ -2,11 +2,34 @@
 
 All notable changes to Jira MCP will be documented in this file.
 
+## [0.8.0] - 2026-11-05
+
+### Features
+
+- Add issue hierarchy and operational consoles
+
 ## [0.7.0] - 2026-09-26
+
+### Chores
+
+- *(release)* Prepare for v0.7.0
+
 
 ### Features
 
 - *(cli)* Improve Jira MCP setup and client onboarding
+
+
+### Other
+
+- Merge pull request #16 from lucaswilliameufrasio/release/v0.7.0
+
+Release v0.7.0
+
+
+### Testing
+
+- *(config)* Avoid relying on detected MCP clients
 
 ## [0.6.5] - 2026-09-23
 
