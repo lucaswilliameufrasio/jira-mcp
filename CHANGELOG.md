@@ -2,13 +2,28 @@
 
 All notable changes to Jira MCP will be documented in this file.
 
+## [1.0.0] - 2026-11-07
+
+### Features
+
+- *(console)* Open the local panel from the CLI
+
 ## [0.8.1] - 2026-11-07
+
+### Chores
+
+- *(release)* Prepare for v0.8.1
+
 
 ### Other
 
 - Merge pull request #18 from lucaswilliameufrasio/fix/isolate-setup-tests
 
 test(config): isolate setup tests from the real home directory
+
+- Merge pull request #19 from lucaswilliameufrasio/release/v0.8.1
+
+Release v0.8.1
 
 
 ### Testing
