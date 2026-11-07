@@ -2,11 +2,41 @@
 
 All notable changes to Jira MCP will be documented in this file.
 
+## [0.8.1] - 2026-11-07
+
+### Other
+
+- Merge pull request #18 from lucaswilliameufrasio/fix/isolate-setup-tests
+
+test(config): isolate setup tests from the real home directory
+
+
+### Testing
+
+- *(config)* Isolate setup tests from the real home directory
+
 ## [0.8.0] - 2026-11-05
+
+### CI / Build
+
+- Update golangci-lint for Go 1.27
+
+
+### Chores
+
+- *(release)* Prepare for v0.8.0
+
 
 ### Features
 
 - Add issue hierarchy and operational consoles
+
+
+### Other
+
+- Merge pull request #17 from lucaswilliameufrasio/release/v0.8.0
+
+Release v0.8.0
 
 ## [0.7.0] - 2026-09-26
 
