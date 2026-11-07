@@ -94,9 +94,31 @@ func TestParseSelectionKeepsCurrentSelectionOnEnter(t *testing.T) {
 	}
 }
 
-func TestRunSetupWritesPrivateConfig(t *testing.T) {
+// isolateUserEnvironment points every location the setup reads or writes at a
+// temporary directory: the config root, the home directory (Claude Code,
+// Codex, Claude Desktop) and the working directory (per-project client
+// files). Without it, a setup test that keeps the detected client selection
+// rewrites the real ~/.claude.json with the test binary as the server.
+func isolateUserEnvironment(t *testing.T) string {
+	t.Helper()
 	root := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", root)
+	home := filepath.Join(root, "home")
+	project := filepath.Join(root, "project")
+	for _, dir := range []string{home, project} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("APPDATA", filepath.Join(home, "AppData"))
+	t.Chdir(project)
+	return home
+}
+
+func TestRunSetupWritesPrivateConfig(t *testing.T) {
+	isolateUserEnvironment(t)
 	input := strings.NewReader("https://jira.example\ncloud\nuser@example.com\nsecret\n\n")
 	output := &strings.Builder{}
 	if err := RunSetup(input, output); err != nil {
@@ -122,8 +144,7 @@ func TestRunSetupWritesPrivateConfig(t *testing.T) {
 }
 
 func TestRunSetupKeepsToolsOnEnter(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", root)
+	isolateUserEnvironment(t)
 	seed := File{BaseURL: "https://jira.example", Deployment: "cloud", Email: "old@example.com", APIToken: "old-token", Tools: []string{"jira_get_issue", "jira_search"}}
 	if err := os.MkdirAll(filepath.Dir(Path()), 0700); err != nil {
 		t.Fatal(err)
@@ -286,5 +307,46 @@ func TestServerEntryReferencesProfileInsteadOfCopyingCredentials(t *testing.T) {
 	}
 	if strings.Contains(string(encoded), "must-not-leak") || strings.Contains(string(encoded), "person@example.com") {
 		t.Fatalf("client config contains credentials: %s", encoded)
+	}
+}
+
+// Regression: the setup keeps already configured clients selected on Enter, so
+// a test run used to rewrite the developer's real ~/.claude.json with the test
+// binary as the jira server. The rewrite must stay inside the isolated HOME.
+func TestRunSetupRewritesOnlyTheIsolatedClaudeConfig(t *testing.T) {
+	home := isolateUserEnvironment(t)
+	claudeConfig := filepath.Join(home, ".claude.json")
+	existing := `{"mcpServers":{"jira":{"command":"/usr/local/bin/jira-mcp","env":{"JIRA_MCP_PROFILE":"work.example"}}}}`
+	if err := os.WriteFile(claudeConfig, []byte(existing), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	input := strings.NewReader("https://jira.example\ncloud\nuser@example.com\nsecret\n\n\n")
+	if err := RunSetup(input, &strings.Builder{}); err != nil {
+		t.Fatal(err)
+	}
+
+	b, err := os.ReadFile(claudeConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var written struct {
+		MCPServers map[string]struct {
+			Command string            `json:"command"`
+			Env     map[string]string `json:"env"`
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(b, &written); err != nil {
+		t.Fatalf("isolated Claude config is not JSON: %v", err)
+	}
+	server, ok := written.MCPServers["jira"]
+	if !ok {
+		t.Fatalf("setup did not keep the jira server in the isolated config: %s", b)
+	}
+	if server.Command == "/usr/local/bin/jira-mcp" {
+		t.Fatalf("setup did not rewrite the isolated Claude config: %s", b)
+	}
+	if server.Env["JIRA_MCP_PROFILE"] != "jira.example" {
+		t.Fatalf("isolated config does not reference the new profile: %s", b)
 	}
 }
