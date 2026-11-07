@@ -110,13 +110,20 @@ todos os usuários, nem uma verificação da disponibilidade atual do Jira. Se o
 armazenamento estiver indisponível, as páginas informam a falha em vez de
 mostrar zero.
 
-### Console web local no stdio
+### Console web local
 
-Defina `JIRA_MCP_WEB=true` no ambiente do processo MCP para iniciar o console
-opcional. O endereço `http://127.0.0.1:<porta>/web/overview` aparece no **stderr**
-do processo; a porta é escolhida pelo sistema e muda a cada inicialização. A
-saída stdout continua reservada ao protocolo MCP. O console para quando o
-processo stdio é encerrado.
+As mesmas páginas de visão geral, monitoramento e auditoria abrem em outro
+terminal, sem variável no processo MCP:
+
+```bash
+jira-mcp console
+```
+
+O comando sobe um processo separado, só em `127.0.0.1`, e imprime
+`http://127.0.0.1:<porta>/web/overview`. A porta muda a cada execução. Ele lê
+a auditoria que os processos stdio já gravaram no mesmo diretório de estado e
+não usa as credenciais do Jira. Ctrl+C encerra só o painel. O processo MCP não
+abre o painel; se `JIRA_MCP_WEB` ainda estiver definido, ele é ignorado.
 
 O console é somente leitura, restrito ao loopback, e rejeita hosts e origens
 inesperados. **Ele não autentica usuários locais:** qualquer processo ou usuário
@@ -207,6 +214,7 @@ make test-integration   # fake OAuth/MCP + Valkey 9.1.x real via Docker
 make test-e2e            # binário real via stdio
 make test                # todas as camadas
 jira-mcp doctor          # diagnóstico de config, clientes, tools e MCP stdio
+jira-mcp console         # painel local de visão geral, monitoramento e auditoria
 ```
 
 O E2E stdio usa `JIRA_MCP_BINARY` quando executado diretamente. O teste de

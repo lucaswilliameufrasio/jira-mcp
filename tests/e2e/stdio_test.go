@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -22,30 +23,21 @@ import (
 )
 
 type consoleLogCapture struct {
-	mu      sync.Mutex
-	buffer  string
-	address chan string
+	mu   sync.Mutex
+	text string
 }
 
 func (c *consoleLogCapture) Write(p []byte) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.buffer += string(p)
-	for {
-		line, rest, found := strings.Cut(c.buffer, "\n")
-		if !found {
-			break
-		}
-		c.buffer = rest
-		const prefix = "[jira-mcp] local console: "
-		if strings.HasPrefix(line, prefix) {
-			select {
-			case c.address <- strings.TrimPrefix(line, prefix):
-			default:
-			}
-		}
-	}
+	c.text += string(p)
 	return len(p), nil
+}
+
+func (c *consoleLogCapture) String() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.text
 }
 
 func TestBinaryVersionExitsImmediately(t *testing.T) {
@@ -107,7 +99,7 @@ func TestBinarySpeaksMCPOverStdio(t *testing.T) {
 	cmd := exec.Command(binary)
 	stateDir := t.TempDir()
 	cmd.Env = append(os.Environ(), "JIRA_BASE_URL="+fakeJira.URL, "JIRA_DEPLOYMENT=cloud", "JIRA_EMAIL=e2e@example.com", "JIRA_API_TOKEN=e2e-token", "XDG_CONFIG_HOME="+t.TempDir(), "XDG_STATE_HOME="+stateDir, "JIRA_MCP_WEB=true")
-	logs := &consoleLogCapture{address: make(chan string, 1)}
+	logs := &consoleLogCapture{}
 	cmd.Stderr = logs
 	client := mcp.NewClient(&mcp.Implementation{Name: "e2e-client", Version: "1.0.0"}, nil)
 	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: cmd}, nil)
@@ -138,11 +130,45 @@ func TestBinarySpeaksMCPOverStdio(t *testing.T) {
 	if err != nil || len(events) != 1 || events[0].Tool != "jira_search" || !events[0].Success {
 		t.Fatalf("audit events = %#v, err = %v", events, err)
 	}
+	stderr := logs.String()
+	if strings.Contains(stderr, "local console: http") {
+		t.Fatalf("stdio process exposed a console URL: %s", stderr)
+	}
+	if !strings.Contains(stderr, "JIRA_MCP_WEB no longer starts the panel") {
+		t.Fatalf("stdio process did not ignore JIRA_MCP_WEB: %s", stderr)
+	}
+	console := exec.Command(binary, "console")
+	console.Env = append(os.Environ(), "XDG_STATE_HOME="+stateDir)
+	consoleOut, err := console.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := console.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if console.Process != nil {
+			_ = console.Process.Kill()
+		}
+		_ = console.Wait()
+	})
+	addressCh := make(chan string, 1)
+	go func() {
+		scanner := bufio.NewScanner(consoleOut)
+		for scanner.Scan() {
+			const prefix = "[jira-mcp] local console: "
+			line := scanner.Text()
+			if strings.HasPrefix(line, prefix) {
+				addressCh <- strings.TrimPrefix(line, prefix)
+				return
+			}
+		}
+	}()
 	var address string
 	select {
-	case address = <-logs.address:
+	case address = <-addressCh:
 	case <-ctx.Done():
-		t.Fatal("local console address missing from stderr")
+		t.Fatal("local console address missing from jira-mcp console")
 	}
 	if !strings.HasPrefix(address, "http://127.0.0.1:") {
 		t.Fatal("console did not bind to loopback")

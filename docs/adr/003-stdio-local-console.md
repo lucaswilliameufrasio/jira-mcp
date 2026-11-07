@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-05
 
-**Status:** Accepted
+**Status:** Superseded by ADR-004
 **Evidence:** Request for the same operational pages in stdio, limited to local access.
 
 ## Context

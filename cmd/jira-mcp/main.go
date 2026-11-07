@@ -17,12 +17,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -75,6 +78,13 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "console" {
+		if err := runConsole(); err != nil {
+			fmt.Fprintln(os.Stderr, "[jira-mcp] console error:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "remote" {
 		if err := runRemote(); err != nil {
 			fmt.Fprintln(os.Stderr, "[jira-mcp] remote error:", err)
@@ -112,37 +122,48 @@ func main() {
 		}
 	})
 	tools.Register(server, client)
-	var web *localconsole.Server
-	if raw := strings.TrimSpace(os.Getenv("JIRA_MCP_WEB")); raw != "" {
-		enabled, parseErr := strconv.ParseBool(raw)
-		if parseErr != nil {
-			fmt.Fprintln(os.Stderr, "[jira-mcp] JIRA_MCP_WEB must be true or false")
-			os.Exit(1)
-		}
-		if enabled {
-			web, err = localconsole.Start(auditStore, func(error) {
-				fmt.Fprintln(os.Stderr, "[jira-mcp] local console stopped unexpectedly")
-			})
-			if err != nil {
-				fmt.Fprintln(os.Stderr, "[jira-mcp] local console could not start")
-				os.Exit(1)
-			}
-			fmt.Fprintf(os.Stderr, "[jira-mcp] local console: %s\n", web.URL)
-		}
+	if strings.TrimSpace(os.Getenv("JIRA_MCP_WEB")) != "" {
+		fmt.Fprintln(os.Stderr, "[jira-mcp] JIRA_MCP_WEB no longer starts the panel; run `jira-mcp console`")
 	}
 
 	server.Logf("starting jira-mcp %s (deployment=%s, base_url=%s)", version, cfg.Deployment, cfg.BaseURL)
 
-	runErr := server.Run(context.Background())
-	if web != nil {
-		if err := web.Close(); err != nil {
-			fmt.Fprintln(os.Stderr, "[jira-mcp] local console could not close cleanly")
-		}
-	}
-	if runErr != nil {
-		fmt.Fprintln(os.Stderr, "[jira-mcp] fatal error:", runErr)
+	if err := server.Run(context.Background()); err != nil {
+		fmt.Fprintln(os.Stderr, "[jira-mcp] fatal error:", err)
 		os.Exit(1)
 	}
+}
+
+func runConsole() error {
+	if len(os.Args) > 2 {
+		return errors.New("console does not take arguments")
+	}
+	retention, err := audit.ParseRetention(strings.TrimSpace(os.Getenv("JIRA_MCP_AUDIT_RETENTION")))
+	if err != nil {
+		return err
+	}
+	auditDir, err := audit.DefaultDirectory()
+	if err != nil {
+		return errors.New("audit directory unavailable")
+	}
+	auditStore, err := audit.NewFileStore(auditDir, retention)
+	if err != nil {
+		return errors.New("audit store unavailable")
+	}
+	web, err := localconsole.Start(auditStore, func(error) {
+		fmt.Fprintln(os.Stderr, "[jira-mcp] local console stopped unexpectedly")
+	})
+	if err != nil {
+		return errors.New("local console could not start")
+	}
+	_, _ = fmt.Fprintf(os.Stdout, "[jira-mcp] local console: %s\n", web.URL)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	<-ctx.Done()
+	if err := web.Close(); err != nil {
+		return errors.New("local console could not close cleanly")
+	}
+	return nil
 }
 
 func printHelp(out *os.File) {
@@ -154,6 +175,7 @@ func printHelp(out *os.File) {
 	_, _ = fmt.Fprintln(out, "  jira-mcp install-mcp      Register a saved connection in selected AI clients")
 	_, _ = fmt.Fprintln(out, "  jira-mcp install-instructions  Add or refresh Jira MCP agent guidance in AGENTS.md and CLAUDE.md")
 	_, _ = fmt.Fprintln(out, "  jira-mcp doctor           Check saved configuration, clients, and MCP tools")
+	_, _ = fmt.Fprintln(out, "  jira-mcp console          Open the local operational panel on 127.0.0.1")
 	_, _ = fmt.Fprintln(out, "  jira-mcp remote           Start the self-hosted HTTP/OAuth server")
 	_, _ = fmt.Fprintln(out, "  jira-mcp --version        Print the version")
 	_, _ = fmt.Fprintln(out, "")

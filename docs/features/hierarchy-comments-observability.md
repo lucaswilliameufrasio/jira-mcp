@@ -4,7 +4,7 @@
 
 - Manage Jira issues in epic and initiative hierarchies, including separate operations to link, unlink, and permanently delete an issue.
 - Allow rich Jira Cloud comments, including mentions, while preserving plain-text compatibility.
-- Provide separate overview, monitoring, and audit views in both remote and stdio modes.
+- Provide separate overview, monitoring, and audit views for the remote server and for a local console command. The local command reads the audit written by stdio.
 
 ## Confirmed rules
 
@@ -31,4 +31,4 @@
 - Audit retention defaults to 30 days and is configured with `JIRA_MCP_AUDIT_RETENTION` as a positive Go duration, capped at 365 days. The stdio mode uses one private event file per call under the local state directory, permitting multiple MCP processes to append without overwriting each other. Expired files are cleaned on writes and reads; an inactive installation cannot remove them until the next access. Remote mode uses per-identity Valkey keys with server-side expiry and an atomic sorted-set index. The index is bounded, so audit is operational best-effort rather than a compliance-grade immutable ledger. A storage failure is reported to stderr without sensitive payloads and does not change the result of a Jira operation, which may already have happened. Source: implementation choice; revisit for compliance or stronger delivery requirements.
 - Browser authentication and session isolation follow ADR-002.
 - Remote operational pages use server-rendered Go templates, without third-party assets or JavaScript. Overview, monitoring and audit are separate read-only journeys. Each request derives the audit identity solely from its authenticated account and Jira site. Indicators summarize at most the 200 latest retained events, explicitly label that limit, and must not imply complete system-wide metrics or current Jira connectivity. A failed audit read is shown as unavailable, never as zero activity. Page output is private, uncached and automatically escaped. The stdio interface reuses the same renderer. Source: implementation choice.
-- The optional stdio console shares those templates and local audit records, with the loopback-only boundary and limitations in ADR-003.
+- The local panel is the separate `jira-mcp console` process from ADR-004. It reuses these templates and the local audit files. It does not run inside the MCP process and does not honor `JIRA_MCP_WEB`. The loopback boundary and lack of local authentication remain those carried forward by ADR-004. Source: user request.

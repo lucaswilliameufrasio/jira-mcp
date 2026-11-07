@@ -19,8 +19,9 @@ reported against 1.27.1. See the [Go release history](https://go.dev/doc/devel/r
 ## Operational console verification
 
 `TestBinarySpeaksMCPOverStdio` starts the real stdio binary with a synthetic Jira
-HTTP server, invokes a tool over MCP, and verifies that its local audit event
-appears on the console pages. `TestBrowserOAuthWithValkey` exercises the remote
+HTTP server, invokes a tool over MCP, and verifies that a separate `jira-mcp console`
+process serves that local audit event on the console pages. The stdio process does
+not open the panel, including when `JIRA_MCP_WEB` is set. `TestBrowserOAuthWithValkey` exercises the remote
 OAuth and site-selection flow with synthetic Atlassian endpoints and real local
 Valkey, then checks the three authenticated pages and logout with an HTTP cookie
 client. `TestConsolePagesUseOnlyAuthenticatedUsersAudit` checks account
