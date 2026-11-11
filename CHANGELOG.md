@@ -2,11 +2,34 @@
 
 All notable changes to Jira MCP will be documented in this file.
 
+## [1.1.0] - 2026-11-11
+
+### Features
+
+- *(tools)* Assign issues by name and search users
+
+
+### Other
+
+- Update Go toolchain to 1.27.4
+
 ## [1.0.0] - 2026-11-07
+
+### Chores
+
+- *(release)* Prepare for v1.0.0
+
 
 ### Features
 
 - *(console)* Open the local panel from the CLI
+
+
+### Other
+
+- Merge pull request #20 from lucaswilliameufrasio/release/v1.0.0
+
+Release v1.0.0
 
 ## [0.8.1] - 2026-11-07
 
