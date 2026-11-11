@@ -6,6 +6,7 @@ package tools
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -345,19 +346,32 @@ func Register(s *mcp.Server, client *jira.Client) {
 
 	s.RegisterTool(mcp.Tool{
 		Name:        "jira_assign_issue",
-		Description: "Atribui (ou remove a atribuição de) uma issue a um usuário.",
+		Description: "Atribui, troca ou remove o responsável de uma issue. Aceita nome, e-mail, accountId/username, 'me' (você) ou 'unassign' — o nome é resolvido entre os usuários atribuíveis à issue.",
 		InputSchema: mcp.InputSchema{
 			Type: "object",
 			Properties: map[string]interface{}{
 				"issue_key": map[string]interface{}{"type": "string", "description": "Chave ou ID da issue."},
 				"assignee": map[string]interface{}{
 					"type":        "string",
-					"description": "accountId (Cloud) ou username (Server/DC) do responsável. Use 'unassign' para remover a atribuição.",
+					"description": "Quem será o responsável: nome de exibição, e-mail, accountId (Cloud) ou username (Server/DC). Use 'me' para o usuário autenticado e 'unassign' para remover o responsável.",
 				},
 			},
 			Required: []string{"issue_key", "assignee"},
 		},
 	}, mcp.TextHandler(handleAssignIssue(client)))
+
+	s.RegisterTool(mcp.Tool{
+		Name:        "jira_search_users",
+		Description: "Busca usuários do Jira por nome ou e-mail e retorna o accountId (Cloud) ou username (Server/DC). Com issue_key, lista apenas quem pode ser responsável por aquela issue.",
+		InputSchema: mcp.InputSchema{
+			Type: "object",
+			Properties: map[string]interface{}{
+				"query":       map[string]interface{}{"type": "string", "description": "Trecho do nome ou e-mail. Pode ser omitido quando issue_key é informado, para listar todos os atribuíveis."},
+				"issue_key":   map[string]interface{}{"type": "string", "description": "Chave da issue; restringe a busca aos usuários que podem ser responsáveis por ela."},
+				"max_results": map[string]interface{}{"type": "integer", "description": "Máximo de usuários (padrão 20, máximo 100)."},
+			},
+		},
+	}, mcp.TextHandler(handleSearchUsers(client)))
 
 	// --- Agile: boards & sprints ---
 
@@ -505,7 +519,7 @@ func AvailableToolNames() []string {
 		"jira_add_comment", "jira_get_comment", "jira_list_comments", "jira_update_comment", "jira_list_transitions", "jira_transition_issue",
 		"jira_list_issue_link_types", "jira_list_issue_links", "jira_create_issue_link",
 		"jira_update_issue_link", "jira_delete_issue_link",
-		"jira_list_projects", "jira_assign_issue", "jira_list_boards", "jira_get_board", "jira_get_issue_rank", "jira_update_issue_rank",
+		"jira_list_projects", "jira_assign_issue", "jira_search_users", "jira_list_boards", "jira_get_board", "jira_get_issue_rank", "jira_update_issue_rank",
 		"jira_list_sprints", "jira_board_issues", "jira_sprint_issues",
 		"jira_list_attachments", "jira_get_attachment",
 	}
@@ -593,6 +607,12 @@ type issueLinkArgs struct {
 type assignIssueArgs struct {
 	IssueKey string `json:"issue_key"`
 	Assignee string `json:"assignee"`
+}
+
+type searchUsersArgs struct {
+	Query      string `json:"query"`
+	IssueKey   string `json:"issue_key"`
+	MaxResults int    `json:"max_results"`
 }
 
 type issueRankArgs struct {
@@ -1165,16 +1185,130 @@ func handleAssignIssue(client *jira.Client) func(json.RawMessage) (string, error
 		if err := unmarshal(raw, &args); err != nil {
 			return "", err
 		}
-		if args.IssueKey == "" || args.Assignee == "" {
+		assignee := strings.TrimSpace(args.Assignee)
+		if args.IssueKey == "" || assignee == "" {
 			return "", fmt.Errorf("'issue_key' e 'assignee' são obrigatórios")
 		}
-		if err := client.AssignIssue(args.IssueKey, args.Assignee); err != nil {
-			return "", friendlyError(err)
-		}
-		if args.Assignee == "unassign" {
+		if strings.EqualFold(assignee, "unassign") {
+			if err := client.AssignIssue(args.IssueKey, ""); err != nil {
+				return "", friendlyError(err)
+			}
 			return fmt.Sprintf("Issue %s teve sua atribuição removida.", args.IssueKey), nil
 		}
-		return fmt.Sprintf("Issue %s atribuída a %s.", args.IssueKey, args.Assignee), nil
+		id, label, matched, err := resolveAssignee(client, args.IssueKey, assignee)
+		if err != nil {
+			return "", err
+		}
+		if err := client.AssignIssue(args.IssueKey, id); err != nil {
+			if !matched {
+				return "", fmt.Errorf("nenhum usuário atribuível a %s corresponde a %q, e o Jira não aceitou o valor como identificador; use jira_search_users com issue_key para ver quem pode ser responsável (%w)", args.IssueKey, assignee, friendlyError(err))
+			}
+			return "", friendlyError(err)
+		}
+		return fmt.Sprintf("Issue %s atribuída a %s.", args.IssueKey, label), nil
+	}
+}
+
+// resolveAssignee turns what the caller typed (display name, email, id or
+// "me") into the identifier Jira assigns by, plus a label for the reply.
+// matched is false when no user was found and the text is passed through.
+func resolveAssignee(client *jira.Client, issueKey, assignee string) (id, label string, matched bool, err error) {
+	if strings.EqualFold(assignee, "me") {
+		me, err := client.Myself()
+		if err != nil {
+			return "", "", false, friendlyError(err)
+		}
+		return client.AssignID(*me), formatUser(client, *me), true, nil
+	}
+	users, err := client.FindAssignableUsers(issueKey, assignee, 50)
+	if err != nil {
+		return "", "", false, friendlyError(err)
+	}
+	if len(users) == 0 {
+		// The search matches names and emails only, so a value it does not
+		// find may already be an accountId/username: let Jira validate it.
+		return assignee, assignee, false, nil
+	}
+	if exact := exactUserMatches(client, users, assignee); len(exact) > 0 {
+		users = exact
+	}
+	if len(users) > 1 {
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "%q corresponde a %d usuários atribuíveis a %s; informe o identificador de um deles:\n", assignee, len(users), issueKey)
+		for _, u := range users {
+			fmt.Fprintf(&sb, "- %s\n", formatUser(client, u))
+		}
+		return "", "", false, errors.New(strings.TrimRight(sb.String(), "\n"))
+	}
+	return client.AssignID(users[0]), formatUser(client, users[0]), true, nil
+}
+
+func exactUserMatches(client *jira.Client, users []jira.User, text string) []jira.User {
+	var exact []jira.User
+	for _, u := range users {
+		if strings.EqualFold(u.DisplayName, text) || strings.EqualFold(u.EmailAddress, text) || client.AssignID(u) == text {
+			exact = append(exact, u)
+		}
+	}
+	return exact
+}
+
+func formatUser(client *jira.Client, u jira.User) string {
+	name := u.DisplayName
+	if name == "" {
+		name = "(sem nome)"
+	}
+	idLabel := "accountId"
+	if u.AccountID == "" {
+		idLabel = "username"
+	}
+	out := fmt.Sprintf("%s (%s=%s)", name, idLabel, client.AssignID(u))
+	if u.EmailAddress != "" {
+		out += " <" + u.EmailAddress + ">"
+	}
+	return out
+}
+
+func handleSearchUsers(client *jira.Client) func(json.RawMessage) (string, error) {
+	return func(raw json.RawMessage) (string, error) {
+		var args searchUsersArgs
+		if err := unmarshal(raw, &args); err != nil {
+			return "", err
+		}
+		query := strings.TrimSpace(args.Query)
+		if query == "" && args.IssueKey == "" {
+			return "", fmt.Errorf("informe 'query' ou 'issue_key'")
+		}
+		maxResults := args.MaxResults
+		if maxResults <= 0 {
+			maxResults = 20
+		}
+		if maxResults > 100 {
+			maxResults = 100
+		}
+		var users []jira.User
+		var err error
+		if args.IssueKey != "" {
+			users, err = client.FindAssignableUsers(args.IssueKey, query, maxResults)
+		} else {
+			users, err = client.SearchUsers(query, maxResults)
+		}
+		if err != nil {
+			return "", friendlyError(err)
+		}
+		if len(users) == 0 {
+			return "Nenhum usuário encontrado.", nil
+		}
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "%d usuário(s) encontrado(s):\n", len(users))
+		for _, u := range users {
+			sb.WriteString("- " + formatUser(client, u))
+			if !u.Active {
+				sb.WriteString(" [inativo]")
+			}
+			sb.WriteString("\n")
+		}
+		return sb.String(), nil
 	}
 }
 
@@ -1536,6 +1670,22 @@ func fieldString(fields map[string]interface{}, key string) string {
 	return ""
 }
 
+// userIDSuffix renders the identifier of a user field so it can be reused
+// in jira_assign_issue: accountId on Cloud, username on Server/DC.
+func userIDSuffix(v interface{}) string {
+	m, ok := v.(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	if id, ok := m["accountId"].(string); ok && id != "" {
+		return " (accountId=" + id + ")"
+	}
+	if name, ok := m["name"].(string); ok && name != "" {
+		return " (username=" + name + ")"
+	}
+	return ""
+}
+
 func formatComment(comment *jira.Comment) string {
 	author := comment.Author.DisplayName
 	if author == "" {
@@ -1567,7 +1717,7 @@ func formatIssue(issue *jira.Issue) string {
 		fmt.Fprintf(&sb, "Prioridade: %s\n", priority)
 	}
 	if assignee := fieldString(f, "assignee"); assignee != "" {
-		fmt.Fprintf(&sb, "Responsável: %s\n", assignee)
+		fmt.Fprintf(&sb, "Responsável: %s%s\n", assignee, userIDSuffix(f["assignee"]))
 	} else {
 		sb.WriteString("Responsável: (não atribuído)\n")
 	}

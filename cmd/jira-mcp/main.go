@@ -191,6 +191,7 @@ func installInstructions(out *os.File) error {
 		"- Search for an issue with `jira_search` using JQL, then use `jira_get_issue` with its key when full details are needed.",
 		"- Before changing an issue, inspect its current fields and available transitions. Use `jira_update_issue`, `jira_transition_issue`, comments, assignments, links, and ranking tools only when the requested action is clear.",
 		"- For custom fields, call `jira_get_field_metadata` first and send the field's API key and expected JSON type.",
+		"- To set, change, or clear an assignee use `jira_assign_issue` with a display name, email, `me`, or `unassign`; when a name is ambiguous, pick the identifier from `jira_search_users`.",
 		"- For workflow changes, call `jira_list_transitions` before `jira_transition_issue`; use an exact transition name or ID.",
 		"- For attachments, call `jira_list_attachments` first. Images can be analyzed inline; other files are returned as authenticated links.",
 		"- If Jira tools are unavailable, tell the user to run `jira-mcp doctor` and restart/reload their MCP client after configuration changes.",

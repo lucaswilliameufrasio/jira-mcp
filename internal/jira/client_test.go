@@ -3,6 +3,7 @@ package jira
 import (
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -423,5 +424,60 @@ func TestListBoardsPaginates(t *testing.T) {
 	}
 	if len(boards) != 2 || boards[0].ID != 1 || boards[1].ID != 2 {
 		t.Fatalf("boards = %#v", boards)
+	}
+}
+
+func TestAssignIssueUsesDeploymentIdentifier(t *testing.T) {
+	cases := []struct {
+		name       string
+		deployment Deployment
+		assignee   string
+		wantPath   string
+		wantBody   string
+	}{
+		{"cloud assign", DeploymentCloud, "acc-1", "/rest/api/3/issue/ABC-1/assignee", `{"accountId":"acc-1"}`},
+		{"cloud unassign", DeploymentCloud, "", "/rest/api/3/issue/ABC-1/assignee", `{"accountId":null}`},
+		{"server assign", DeploymentServer, "lucas", "/rest/api/2/issue/ABC-1/assignee", `{"name":"lucas"}`},
+		{"server unassign", DeploymentServer, "unassign", "/rest/api/2/issue/ABC-1/assignee", `{"name":null}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				if r.Method != http.MethodPut || r.URL.Path != tc.wantPath || string(body) != tc.wantBody {
+					t.Errorf("got %s %s %s, want PUT %s %s", r.Method, r.URL.Path, body, tc.wantPath, tc.wantBody)
+				}
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			defer server.Close()
+			client := NewClient(Config{BaseURL: server.URL, Deployment: tc.deployment, Email: "a@b.c", APIToken: "t", PersonalAccessToken: "pat"})
+			if err := client.AssignIssue("ABC-1", tc.assignee); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestFindAssignableUsersUsesDeploymentQueryParameter(t *testing.T) {
+	for deployment, wantQuery := range map[Deployment]string{
+		DeploymentCloud:  "issueKey=ABC-1&maxResults=5&query=lucas",
+		DeploymentServer: "issueKey=ABC-1&maxResults=5&username=lucas",
+	} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !strings.HasSuffix(r.URL.Path, "/user/assignable/search") || r.URL.RawQuery != wantQuery {
+				t.Errorf("%s: got %s?%s, want query %s", deployment, r.URL.Path, r.URL.RawQuery, wantQuery)
+			}
+			_, _ = w.Write([]byte(`[{"accountId":"acc-1","name":"lucas","displayName":"Lucas","active":true}]`))
+		}))
+		client := NewClient(Config{BaseURL: server.URL, Deployment: deployment, Email: "a@b.c", APIToken: "t", PersonalAccessToken: "pat"})
+		users, err := client.FindAssignableUsers("ABC-1", "lucas", 5)
+		server.Close()
+		if err != nil || len(users) != 1 {
+			t.Fatalf("%s: users=%v err=%v", deployment, users, err)
+		}
+		wantID := map[Deployment]string{DeploymentCloud: "acc-1", DeploymentServer: "lucas"}[deployment]
+		if got := client.AssignID(users[0]); got != wantID {
+			t.Errorf("%s: AssignID = %q, want %q", deployment, got, wantID)
+		}
 	}
 }

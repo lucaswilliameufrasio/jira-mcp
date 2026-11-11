@@ -1017,16 +1017,86 @@ func (c *Client) GetProject(projectKey string) (*Project, error) {
 	return &out, nil
 }
 
-// AssignIssue assigns (or unassigns, with accountIDOrNil == "unassign") an
-// issue. For Cloud, pass an accountId; for Server/DC, pass a username.
-func (c *Client) AssignIssue(issueKey, assignee string) error {
-	var body map[string]interface{}
-	if assignee == "" || assignee == "unassign" {
-		body = map[string]interface{}{"accountId": nil}
-	} else if c.cfg.Deployment == DeploymentServer {
-		body = map[string]interface{}{"name": assignee}
+// User is a Jira user as returned by the user search endpoints. Cloud
+// identifies users by AccountID; Server/DC by Name (the username).
+type User struct {
+	AccountID    string `json:"accountId,omitempty"`
+	Name         string `json:"name,omitempty"`
+	Key          string `json:"key,omitempty"`
+	DisplayName  string `json:"displayName,omitempty"`
+	EmailAddress string `json:"emailAddress,omitempty"`
+	Active       bool   `json:"active"`
+}
+
+// AssignID returns the identifier AssignIssue expects for this user on the
+// configured deployment: the accountId on Cloud, the username on Server/DC.
+func (c *Client) AssignID(u User) string {
+	if c.cfg.Deployment == DeploymentServer {
+		return u.Name
+	}
+	return u.AccountID
+}
+
+// userQuery builds the search query for the user endpoints. Cloud matches
+// "query" against display name and email; Server/DC only accepts "username",
+// which matches username, display name and email.
+func (c *Client) userQuery(text string, maxResults int) url.Values {
+	q := url.Values{}
+	if c.cfg.Deployment == DeploymentServer {
+		// Server/DC rejects an empty username; "." matches every user.
+		if text == "" {
+			text = "."
+		}
+		q.Set("username", text)
 	} else {
-		body = map[string]interface{}{"accountId": assignee}
+		q.Set("query", text)
+	}
+	if maxResults > 0 {
+		q.Set("maxResults", strconv.Itoa(maxResults))
+	}
+	return q
+}
+
+// SearchUsers finds users across the site by display name, email or username.
+func (c *Client) SearchUsers(text string, maxResults int) ([]User, error) {
+	var out []User
+	if err := c.doJSON(http.MethodGet, c.apiPath("/user/search"), c.userQuery(text, maxResults), nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// FindAssignableUsers finds the users that can be assigned to an issue. An
+// empty text lists every assignable user (up to maxResults).
+func (c *Client) FindAssignableUsers(issueKey, text string, maxResults int) ([]User, error) {
+	q := c.userQuery(text, maxResults)
+	q.Set("issueKey", issueKey)
+	var out []User
+	if err := c.doJSON(http.MethodGet, c.apiPath("/user/assignable/search"), q, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// Myself returns the authenticated user.
+func (c *Client) Myself() (*User, error) {
+	var out User
+	if err := c.doJSON(http.MethodGet, c.apiPath("/myself"), nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// AssignIssue assigns an issue. For Cloud, pass an accountId; for Server/DC,
+// pass a username. An empty assignee (or "unassign") removes the assignment.
+func (c *Client) AssignIssue(issueKey, assignee string) error {
+	key := "accountId"
+	if c.cfg.Deployment == DeploymentServer {
+		key = "name"
+	}
+	body := map[string]interface{}{key: assignee}
+	if assignee == "" || assignee == "unassign" {
+		body[key] = nil
 	}
 	return c.doJSON(http.MethodPut, c.apiPath("/issue/"+url.PathEscape(issueKey)+"/assignee"), nil, body, nil)
 }

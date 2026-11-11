@@ -32,7 +32,8 @@ Landing page e documentação: [docs-site](docs-site/README.md).
 | `jira_list_transitions` | Lista transições de workflow disponíveis |
 | `jira_transition_issue` | Move a issue no workflow (por ID ou nome) |
 | `jira_list_projects` | Lista projetos visíveis |
-| `jira_assign_issue` | Atribui/remove atribuição de uma issue |
+| `jira_assign_issue` | Atribui, troca ou remove o responsável — aceita nome, e-mail, accountId/username, `me` ou `unassign` |
+| `jira_search_users` | Busca usuários por nome/e-mail e retorna o accountId (ou username); com `issue_key`, só os atribuíveis |
 | `jira_list_boards` | Lista boards Scrum/Kanban (Jira Software) |
 | `jira_get_board` | Detalhes de um board |
 | `jira_get_issue_rank` | Verifica a posição de uma issue no board |

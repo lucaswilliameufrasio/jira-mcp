@@ -266,3 +266,116 @@ func TestAvailableToolNamesIncludesIssueRankTools(t *testing.T) {
 		}
 	}
 }
+
+func assignTestServer(t *testing.T, users string, assigned *map[string]interface{}) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/rest/api/3/user/assignable/search":
+			if r.URL.Query().Get("issueKey") != "ABC-1" {
+				t.Errorf("issueKey = %q", r.URL.Query().Get("issueKey"))
+			}
+			_, _ = w.Write([]byte(users))
+		case r.Method == http.MethodGet && r.URL.Path == "/rest/api/3/myself":
+			_, _ = w.Write([]byte(`{"accountId":"acc-me","displayName":"Eu Mesmo","active":true}`))
+		case r.Method == http.MethodPut && r.URL.Path == "/rest/api/3/issue/ABC-1/assignee":
+			if err := json.NewDecoder(r.Body).Decode(assigned); err != nil {
+				t.Fatal(err)
+			}
+			if id, _ := (*assigned)["accountId"].(string); id == "ghost" {
+				http.Error(w, `{"errorMessages":["user not found"]}`, http.StatusNotFound)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+func TestHandleAssignIssueResolvesAssignee(t *testing.T) {
+	const twoLucas = `[{"accountId":"acc-1","displayName":"Lucas Eufrasio","active":true},{"accountId":"acc-2","displayName":"Lucas Eufrasio Silva","active":true}]`
+	cases := []struct {
+		name, users, assignee string
+		wantID                interface{}
+		wantOut               string
+	}{
+		{"single match by name", `[{"accountId":"acc-1","displayName":"Lucas Eufrasio","active":true}]`, "lucas", "acc-1", "Lucas Eufrasio (accountId=acc-1)"},
+		{"exact name wins over partial", twoLucas, "lucas eufrasio", "acc-1", "accountId=acc-1"},
+		{"raw accountId passes through", `[]`, "712020:abc", "712020:abc", "712020:abc"},
+		{"me", `[]`, "me", "acc-me", "Eu Mesmo (accountId=acc-me)"},
+		{"unassign", `[]`, "unassign", nil, "atribuição removida"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assigned := map[string]interface{}{}
+			server := assignTestServer(t, tc.users, &assigned)
+			client := jira.NewClient(jira.Config{BaseURL: server.URL, Email: "a@b.c", APIToken: "t"})
+			out, err := handleAssignIssue(client)(json.RawMessage(`{"issue_key":"ABC-1","assignee":"` + tc.assignee + `"}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, present := assigned["accountId"]
+			if !present || got != tc.wantID {
+				t.Errorf("accountId sent = %v (present=%v), want %v", got, present, tc.wantID)
+			}
+			if !strings.Contains(out, tc.wantOut) {
+				t.Errorf("output %q missing %q", out, tc.wantOut)
+			}
+		})
+	}
+}
+
+func TestHandleAssignIssueRejectsAmbiguousAndUnknownNames(t *testing.T) {
+	assigned := map[string]interface{}{}
+	server := assignTestServer(t, `[{"accountId":"acc-1","displayName":"Lucas A","active":true},{"accountId":"acc-2","displayName":"Lucas B","active":true}]`, &assigned)
+	client := jira.NewClient(jira.Config{BaseURL: server.URL, Email: "a@b.c", APIToken: "t"})
+	_, err := handleAssignIssue(client)(json.RawMessage(`{"issue_key":"ABC-1","assignee":"lucas"}`))
+	if err == nil || !strings.Contains(err.Error(), "acc-1") || !strings.Contains(err.Error(), "acc-2") {
+		t.Fatalf("ambiguous name should list candidates, got %v", err)
+	}
+	if len(assigned) != 0 {
+		t.Errorf("ambiguous name must not assign, sent %v", assigned)
+	}
+
+	server = assignTestServer(t, `[]`, &assigned)
+	client = jira.NewClient(jira.Config{BaseURL: server.URL, Email: "a@b.c", APIToken: "t"})
+	_, err = handleAssignIssue(client)(json.RawMessage(`{"issue_key":"ABC-1","assignee":"ghost"}`))
+	if err == nil || !strings.Contains(err.Error(), "jira_search_users") {
+		t.Fatalf("unknown user should point to jira_search_users, got %v", err)
+	}
+}
+
+func TestHandleSearchUsersListsIdentifiers(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/rest/api/3/user/search" || r.URL.Query().Get("query") != "lucas" || r.URL.Query().Get("maxResults") != "20" {
+			t.Errorf("unexpected request %s?%s", r.URL.Path, r.URL.RawQuery)
+		}
+		_, _ = w.Write([]byte(`[{"accountId":"acc-1","displayName":"Lucas Eufrasio","emailAddress":"l@example.com","active":true},{"accountId":"acc-9","displayName":"Lucas Antigo","active":false}]`))
+	}))
+	defer server.Close()
+	client := jira.NewClient(jira.Config{BaseURL: server.URL, Email: "a@b.c", APIToken: "t"})
+	out, err := handleSearchUsers(client)(json.RawMessage(`{"query":"lucas"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Lucas Eufrasio (accountId=acc-1) <l@example.com>", "Lucas Antigo (accountId=acc-9) [inativo]"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output %q missing %q", out, want)
+		}
+	}
+	if _, err := handleSearchUsers(client)(json.RawMessage(`{}`)); err == nil {
+		t.Error("expected an error without query or issue_key")
+	}
+}
+
+func TestFormatIssueShowsAssigneeIdentifier(t *testing.T) {
+	out := formatIssue(&jira.Issue{Key: "ABC-1", Fields: map[string]interface{}{
+		"assignee": map[string]interface{}{"displayName": "Lucas Eufrasio", "accountId": "acc-1"},
+	}})
+	if !strings.Contains(out, "Responsável: Lucas Eufrasio (accountId=acc-1)") {
+		t.Errorf("assignee id missing: %s", out)
+	}
+}
