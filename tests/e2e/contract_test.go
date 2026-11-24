@@ -33,6 +33,8 @@ type fakeJira struct {
 	records []requestRecord
 }
 
+const attachmentBytes = "PK\x03\x04\x00\xfffixture"
+
 func newFakeJira() *fakeJira {
 	f := &fakeJira{}
 	f.server = httptest.NewServer(http.HandlerFunc(f.handle))
@@ -46,6 +48,26 @@ func (f *fakeJira) handle(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.records = append(f.records, requestRecord{Method: r.Method, Path: r.URL.Path, Auth: r.Header.Get("Authorization"), Body: body})
 	f.mu.Unlock()
+
+	if r.Method == http.MethodGet && (r.URL.Path == "/rest/api/3/issue/TEST-1" || r.URL.Path == "/rest/api/2/issue/TEST-1") {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"key": "TEST-1", "fields": map[string]any{"attachment": []map[string]any{{
+				"id": "11", "filename": "logs.zip", "mimeType": "application/zip", "size": len(attachmentBytes),
+				"content": f.server.URL + "/secure/attachment/11/logs.zip",
+			}, {
+				"id": "12", "filename": "large.mp4", "mimeType": "video/mp4", "size": 16 * 1024 * 1024,
+			}, {
+				"id": "13", "filename": "large.mp4", "mimeType": "video/mp4", "size": 16 * 1024 * 1024,
+			}}},
+		})
+		return
+	}
+	if r.Method == http.MethodGet && ((r.URL.Path == "/rest/api/3/attachment/content/11" && r.URL.Query().Get("redirect") == "false") ||
+		r.URL.Path == "/secure/attachment/11/logs.zip") {
+		w.Header().Set("Content-Type", "application/zip")
+		_, _ = io.WriteString(w, attachmentBytes)
+		return
+	}
 
 	if r.URL.Path == "/rest/api/3/search/jql" && r.Method == http.MethodPost {
 		var in struct {
@@ -248,7 +270,24 @@ func validate(binary, deployment, stateDir string) error {
 	}); err != nil {
 		return err
 	}
-	if _, err := p.call("tools/list", map[string]any{}); err != nil {
+	list, err := p.call("tools/list", map[string]any{})
+	if err != nil {
+		return err
+	}
+	result, _ := list["result"].(map[string]any)
+	defs, _ := result["tools"].([]any)
+	var downloadListed bool
+	for _, def := range defs {
+		tool, _ := def.(map[string]any)
+		if tool["name"] == "jira_download_attachment" {
+			downloadListed = true
+			break
+		}
+	}
+	if !downloadListed {
+		return fmt.Errorf("%s does not advertise jira_download_attachment", name)
+	}
+	if err := validateAttachment(p, fake, deployment); err != nil {
 		return err
 	}
 	if _, err := p.call("tools/call", map[string]any{"name": "jira_search", "arguments": map[string]any{"jql": "project = TEST"}}); err != nil {
@@ -284,6 +323,58 @@ func validate(binary, deployment, stateDir string) error {
 	}
 	if len(fake.recordsFor("/rest/agile/1.0/board")) == 0 {
 		return fmt.Errorf("%s did not call the documented Agile board endpoint", name)
+	}
+	return nil
+}
+
+func validateAttachment(p *mcpProcess, fake *fakeJira, deployment string) error {
+	args := map[string]any{"issue_key": "TEST-1", "attachment_id": "11"}
+	if deployment == "server" {
+		args = map[string]any{"issue_key": "TEST-1", "filename": "logs.zip"}
+	}
+	response, err := p.call("tools/call", map[string]any{"name": "jira_download_attachment", "arguments": args})
+	if err != nil {
+		return err
+	}
+	result, _ := response["result"].(map[string]any)
+	content, _ := result["content"].([]any)
+	if result["isError"] == true || len(content) != 2 {
+		return fmt.Errorf("unexpected download result: %v", result)
+	}
+	block, _ := content[1].(map[string]any)
+	resource, _ := block["resource"].(map[string]any)
+	if block["type"] != "resource" || resource["mimeType"] != "application/zip" ||
+		resource["blob"] != base64.StdEncoding.EncodeToString([]byte(attachmentBytes)) ||
+		!strings.HasSuffix(fmt.Sprint(resource["uri"]), "/logs.zip") {
+		return fmt.Errorf("download did not return original bytes and file metadata: %v", block)
+	}
+	path := "/rest/api/3/attachment/content/11"
+	auth := "Basic " + base64.StdEncoding.EncodeToString([]byte("contract@example.com:cloud-token"))
+	if deployment == "server" {
+		path = "/secure/attachment/11/logs.zip"
+		auth = "Bearer server-token"
+	}
+	records := fake.recordsFor(path)
+	if len(records) != 1 || records[0].Auth != auth {
+		return fmt.Errorf("expected one authenticated download from %s", path)
+	}
+	for _, tc := range []struct {
+		args map[string]any
+		want string
+	}{
+		{map[string]any{"issue_key": "TEST-1", "attachment_id": "11", "filename": "logs.zip"}, "informe exatamente um"},
+		{map[string]any{"issue_key": "TEST-1", "attachment_id": "99"}, "anexo não encontrado"},
+		{map[string]any{"issue_key": "TEST-1", "filename": "large.mp4"}, "mais de um anexo"},
+		{map[string]any{"issue_key": "TEST-1", "attachment_id": "12"}, "excede o limite de 15 MiB"},
+	} {
+		response, err := p.call("tools/call", map[string]any{"name": "jira_download_attachment", "arguments": tc.args})
+		if err != nil {
+			return err
+		}
+		result, _ := response["result"].(map[string]any)
+		if result["isError"] != true || !strings.Contains(fmt.Sprint(result["content"]), tc.want) {
+			return fmt.Errorf("download with %v: expected error containing %q, got %v", tc.args, tc.want, result)
+		}
 	}
 	return nil
 }

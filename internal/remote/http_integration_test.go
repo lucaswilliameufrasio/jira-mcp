@@ -52,6 +52,87 @@ func TestRemoteMCPListsToolsForAuthenticatedUser(t *testing.T) {
 	}
 }
 
+func TestRemoteMCPDownloadsAttachmentThroughOAuthGateway(t *testing.T) {
+	rawURL := os.Getenv("VALKEY_URL")
+	if rawURL == "" {
+		t.Skip("VALKEY_URL is required")
+	}
+	store, err := NewValkeyStore(rawURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	const file = "%PDF\x00\xff"
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.Header.Get("Authorization") != "Bearer synthetic-access-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		switch r.URL.Path {
+		case "/ex/jira/download-cloud/rest/api/3/issue/PRIVATE-1":
+			_, _ = fmt.Fprintf(w, `{"fields":{"attachment":[{"id":"42","filename":"report.pdf","mimeType":"application/pdf","size":%d,"content":"https://site.example.invalid/attachment/content/42"}]}}`, len(file))
+		case "/ex/jira/download-cloud/rest/api/3/attachment/content/42":
+			if r.URL.Query().Get("redirect") != "false" {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/pdf")
+			_, _ = w.Write([]byte(file))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer fake.Close()
+	key := make([]byte, 32)
+	token, err := seal(key, "synthetic-access-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	id := fmt.Sprintf("download-test-%d", time.Now().UnixNano())
+	userKey, tokenKey := "mcp:user:"+id, "mcp:token:"+id
+	t.Cleanup(func() {
+		_ = store.Delete(ctx, userKey)
+		_ = store.Delete(ctx, tokenKey)
+	})
+	user := userRecord{
+		AccountID: id, CloudID: "download-cloud", Tools: []string{"jira_download_attachment"},
+		AccessToken: token, ExpiresAt: time.Now().Add(time.Hour),
+	}
+	if err := store.Put(ctx, userKey, user, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put(ctx, tokenKey, accessSession{UserID: id}, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(Config{PublicURL: "https://mcp.example", AtlassianID: "client", AtlassianKey: "secret", AtlassianAPIURL: fake.URL, Store: store, EncryptionKey: key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+	client := mcp.NewClient(&mcp.Implementation{Name: "integration-client", Version: "1.0.0"}, nil)
+	transport := &mcp.StreamableClientTransport{
+		Endpoint: httpServer.URL + "/mcp", DisableStandaloneSSE: true,
+		HTTPClient: &http.Client{Transport: bearerTransport{token: id, base: http.DefaultTransport}},
+	}
+	session, err := client.Connect(ctx, transport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "jira_download_attachment", Arguments: map[string]any{"issue_key": "PRIVATE-1", "attachment_id": "42"},
+	})
+	if err != nil || result.IsError || len(result.Content) != 2 {
+		t.Fatalf("unexpected call result: %#v, err = %v", result, err)
+	}
+	resource, ok := result.Content[1].(*mcp.EmbeddedResource)
+	if !ok || resource.Resource == nil || resource.Resource.MIMEType != "application/pdf" || string(resource.Resource.Blob) != file {
+		t.Fatalf("unexpected attachment resource: %#v", result.Content[1])
+	}
+}
+
 func TestRemoteMCPAuditPersistsForAuthenticatedIdentity(t *testing.T) {
 	rawURL := os.Getenv("VALKEY_URL")
 	if rawURL == "" {

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,10 +17,8 @@ import (
 	"jira-mcp/internal/mcp"
 )
 
-// maxInlineAttachmentBytes caps how large a file jira_get_attachment will
-// embed inline (base64, in a single JSON-RPC message). Above this size, the
-// tool returns metadata plus a download link instead of the raw bytes.
-const maxInlineAttachmentBytes = 15 * 1024 * 1024 // 15 MB
+// maxInlineAttachmentBytes caps raw bytes before Base64 encoding.
+const maxInlineAttachmentBytes = 15 * 1024 * 1024 // 15 MiB
 
 // Register attaches every Jira tool to the given MCP server.
 func Register(s *mcp.Server, client *jira.Client) {
@@ -491,10 +490,8 @@ func Register(s *mcp.Server, client *jira.Client) {
 	}, mcp.TextHandler(handleListAttachments(client)))
 
 	s.RegisterTool(mcp.Tool{
-		Name: "jira_get_attachment",
-		Description: "Baixa um anexo de uma issue. Se for uma imagem (png/jpeg/gif/webp) e não for muito grande, o conteúdo é " +
-			"retornado diretamente para a IA analisar. Para outros tipos (incluindo vídeo), o protocolo MCP não suporta " +
-			"conteúdo binário embutido além de imagens, então retorna metadados e um link de download autenticado.",
+		Name:        "jira_get_attachment",
+		Description: "Mostra uma prévia inline de imagens anexadas a uma issue. Para baixar o arquivo original de qualquer tipo, use jira_download_attachment.",
 		InputSchema: mcp.InputSchema{
 			Type: "object",
 			Properties: map[string]interface{}{
@@ -511,6 +508,21 @@ func Register(s *mcp.Server, client *jira.Client) {
 			Required: []string{"issue_key"},
 		},
 	}, handleGetAttachment(client))
+
+	s.RegisterTool(mcp.Tool{
+		Name: "jira_download_attachment",
+		Description: "Baixa o arquivo original de um anexo do Jira (PDF, ZIP, vídeo, imagem etc.) até 15 MiB. " +
+			"Retorna os bytes em um recurso MCP embutido (resource.blob em Base64). Informe issue_key e exatamente um entre attachment_id e filename.",
+		InputSchema: mcp.InputSchema{
+			Type: "object",
+			Properties: map[string]interface{}{
+				"issue_key":     map[string]interface{}{"type": "string", "description": "Chave ou ID da issue."},
+				"attachment_id": map[string]interface{}{"type": "string", "description": "ID retornado por jira_list_attachments."},
+				"filename":      map[string]interface{}{"type": "string", "description": "Nome exato; se houver nomes repetidos, use o ID."},
+			},
+			Required: []string{"issue_key"},
+		},
+	}, handleDownloadAttachment(client))
 }
 
 func AvailableToolNames() []string {
@@ -521,7 +533,7 @@ func AvailableToolNames() []string {
 		"jira_update_issue_link", "jira_delete_issue_link",
 		"jira_list_projects", "jira_assign_issue", "jira_search_users", "jira_list_boards", "jira_get_board", "jira_get_issue_rank", "jira_update_issue_rank",
 		"jira_list_sprints", "jira_board_issues", "jira_sprint_issues",
-		"jira_list_attachments", "jira_get_attachment",
+		"jira_list_attachments", "jira_get_attachment", "jira_download_attachment",
 	}
 }
 
@@ -1519,7 +1531,7 @@ func handleListAttachments(client *jira.Client) func(json.RawMessage) (string, e
 			fmt.Fprintf(&sb, "- id=%s  nome=%q  tipo=%s  tamanho=%s  enviado por=%s\n",
 				a.ID, a.Filename, a.MimeType, humanSize(a.Size), a.Author.DisplayName)
 		}
-		sb.WriteString("\nUse jira_get_attachment com 'filename' ou 'attachment_id' para baixar um deles.")
+		sb.WriteString("\nUse jira_download_attachment com 'filename' ou 'attachment_id' para baixar o arquivo, ou jira_get_attachment para prévia de imagem.")
 		return sb.String(), nil
 	}
 }
@@ -1585,17 +1597,77 @@ func handleGetAttachment(client *jira.Client) mcp.ToolHandler {
 			}, nil
 		}
 
-		// Not an image (e.g. video, PDF, zip): MCP has no generic binary
-		// content block, so hand back metadata and an authenticated link
-		// instead of raw bytes the model couldn't do anything with anyway.
 		return []mcp.ContentBlock{{
 			Type: "text",
 			Text: fmt.Sprintf(
-				"O anexo %q é do tipo %s (%s). O protocolo MCP não suporta embutir vídeo ou outros binários genéricos "+
-					"inline — apenas imagens. Baixe manualmente em: %s",
+				"O anexo %q é do tipo %s (%s) e não tem prévia de imagem. Use jira_download_attachment para baixar os bytes "+
+					"ou abra no Jira: %s",
 				match.Filename, mimeType, humanSize(match.Size), match.Content,
 			),
 		}}, nil
+	}
+}
+
+func handleDownloadAttachment(client *jira.Client) mcp.ToolHandler {
+	return func(raw json.RawMessage) ([]mcp.ContentBlock, error) {
+		var args getAttachmentArgs
+		if err := unmarshal(raw, &args); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(args.IssueKey) == "" {
+			return nil, fmt.Errorf("o parâmetro 'issue_key' é obrigatório")
+		}
+		if (args.AttachmentID == "") == (args.Filename == "") {
+			return nil, fmt.Errorf("informe exatamente um entre 'attachment_id' e 'filename'")
+		}
+
+		attachments, err := client.ListAttachments(args.IssueKey)
+		if err != nil {
+			return nil, friendlyError(err)
+		}
+		var match *jira.Attachment
+		for i := range attachments {
+			attachment := &attachments[i]
+			if args.AttachmentID != "" && attachment.ID == args.AttachmentID {
+				match = attachment
+				break
+			}
+			if args.Filename == "" || attachment.Filename != args.Filename {
+				continue
+			}
+			if match != nil {
+				return nil, fmt.Errorf("há mais de um anexo com nome %q; use 'attachment_id'", args.Filename)
+			}
+			match = attachment
+		}
+		if match == nil {
+			return nil, fmt.Errorf("anexo não encontrado na issue %s; use jira_list_attachments", args.IssueKey)
+		}
+
+		tooLarge := func() error {
+			return fmt.Errorf("o anexo %q excede o limite de 15 MiB por chamada; abra a issue %s no Jira para baixar", match.Filename, args.IssueKey)
+		}
+		if match.Size > maxInlineAttachmentBytes {
+			return nil, tooLarge()
+		}
+		data, mimeType, err := client.DownloadAttachment(*match, maxInlineAttachmentBytes)
+		if errors.Is(err, jira.ErrAttachmentTooLarge) {
+			return nil, tooLarge()
+		}
+		if err != nil {
+			return nil, err
+		}
+		if mimeType == "" {
+			mimeType = match.MimeType
+		}
+		if mimeType == "" {
+			mimeType = "application/octet-stream"
+		}
+		return []mcp.ContentBlock{
+			{Type: "text", Text: fmt.Sprintf("Anexo %q (%s, %d bytes). Arquivo original no campo resource.blob.", match.Filename, mimeType, len(data))},
+			{Type: "resource", URI: "jira-attachment://file/" + url.PathEscape(args.IssueKey) + "/" + url.PathEscape(match.ID) + "/" + url.PathEscape(match.Filename),
+				Blob: data, MimeType: mimeType},
+		}, nil
 	}
 }
 

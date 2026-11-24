@@ -91,13 +91,13 @@ type ContentBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
 
-	// Used when Type == "image": Data is base64-encoded raw bytes and
-	// MimeType is e.g. "image/png". This is the only binary content type
-	// the MCP spec supports inline (no native "video" block type exists),
-	// so video/other binary files are surfaced as text with a download URL
-	// instead of embedded here.
+	// Data holds base64-encoded image bytes when Type == "image".
 	Data     string `json:"data,omitempty"`
 	MimeType string `json:"mimeType,omitempty"`
+
+	// URI and Blob identify an embedded binary resource when Type == "resource".
+	URI  string `json:"-"`
+	Blob []byte `json:"-"`
 }
 
 type CallToolResult struct {

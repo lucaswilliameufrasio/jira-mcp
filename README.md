@@ -42,7 +42,8 @@ Landing page e documentação: [docs-site](docs-site/README.md).
 | `jira_board_issues` | Issues de um board |
 | `jira_sprint_issues` | Issues de uma sprint |
 | `jira_list_attachments` | Lista anexos (imagens, vídeos, docs) de uma issue |
-| `jira_get_attachment` | Baixa um anexo — imagens são retornadas inline para a IA analisar |
+| `jira_get_attachment` | Mostra imagens anexadas inline para a IA analisar |
+| `jira_download_attachment` | Entrega o arquivo original de qualquer tipo (até 15 MiB) |
 
 `jira_get_issue` solicita todos os campos por padrão, incluindo `customfield_*`.
 Para atualizar campos customizados, use `fields` com o nome API do campo ou o mapa
@@ -141,18 +142,17 @@ um filtro por conta ou site Jira.
 - **Ranking**: `jira_get_issue_rank` retorna a posição do card na ordem paginada
   do board e seus vizinhos. `jira_update_issue_rank` move o card antes ou depois
   de outro card; o Jira não expõe um valor LexoRank portátil para leitura.
-- **Anexos**: o protocolo MCP só tem um tipo de conteúdo binário embutível —
-  **imagem** (base64). Não existe um bloco nativo de "vídeo". Então:
-  - Imagens (`png`, `jpeg`, `gif`, `webp`) até 15&nbsp;MB são devolvidas
-    inline em `jira_get_attachment`, e a IA consegue "ver" e analisar o
-    conteúdo diretamente.
-  - Vídeos e outros binários (PDF, zip etc.) **não são embutidos** — a tool
-    retorna metadados (nome, tipo, tamanho) e um link de download
-    autenticado, que você abre manualmente. Não há como uma IA "assistir" a
-    um vídeo através do MCP hoje; isso é uma limitação do protocolo, não
-    deste servidor.
-  - Arquivos de imagem acima de 15&nbsp;MB também caem nesse fallback de
-    link, para não estourar o limite de mensagem da maioria dos clientes MCP.
+- **Anexos**: primeiro use `jira_list_attachments`. Para prévia de imagem,
+  use `jira_get_attachment`. Para baixar o original (PDF, ZIP, vídeo, imagem
+  etc.), chame `jira_download_attachment` com a issue e o ID do anexo, por
+  exemplo `{"issue_key":"ABC-123","attachment_id":"10001"}`. Também é possível
+  informar `filename` em vez do ID, desde que o nome não esteja repetido.
+  - A ferramenta retorna os bytes em Base64 no campo `resource.blob` de
+    um recurso MCP embutido. O cliente precisa suportar esse tipo de
+    resultado para salvar o arquivo; o servidor não escreve no disco.
+  - Para anexos acima de 15 MiB, baixe diretamente pela issue no Jira.
+  - Se a conexão usa uma lista de ferramentas permitidas, inclua
+    `jira_download_attachment` nela e reconecte o cliente.
 
 Suporta tanto **Jira Cloud** (API v3, ADF para descrições/comentários, paginação
 via `nextPageToken` — a Atlassian removeu o endpoint de busca clássico em 2025)

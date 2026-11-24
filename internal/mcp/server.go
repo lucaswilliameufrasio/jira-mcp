@@ -107,6 +107,10 @@ func convertContent(block ContentBlock) (sdk.Content, error) {
 			return nil, fmt.Errorf("invalid image content: %w", err)
 		}
 		return &sdk.ImageContent{Data: data, MIMEType: block.MimeType}, nil
+	case "resource":
+		return &sdk.EmbeddedResource{Resource: &sdk.ResourceContents{
+			URI: block.URI, MIMEType: block.MimeType, Blob: block.Blob,
+		}}, nil
 	default:
 		return nil, fmt.Errorf("unsupported MCP content type %q", block.Type)
 	}

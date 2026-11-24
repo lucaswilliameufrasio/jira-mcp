@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -1359,31 +1360,64 @@ func (c *Client) ListAttachments(issueKey string) ([]Attachment, error) {
 	return out, nil
 }
 
-// DownloadAttachmentByID fetches the raw bytes and content-type of an
-// attachment by its ID, authenticating the same way as every other call.
-func (c *Client) DownloadAttachmentByID(attachmentID string) (data []byte, contentType string, err error) {
-	// The attachment "content" URL returned in metadata already points at
-	// the right place; this reconstructs it from the ID so callers only
-	// need to have listed attachments once.
-	path := c.apiPath("/attachment/content/" + url.PathEscape(attachmentID))
-	return c.downloadRaw(path)
+// DownloadAttachment fetches a resolved attachment with a hard limit on bytes read.
+func (c *Client) DownloadAttachment(attachment Attachment, limit int64) ([]byte, string, error) {
+	base, err := url.Parse(c.cfg.BaseURL)
+	if err != nil || base.Host == "" || (base.Scheme != "https" && base.Scheme != "http") {
+		return nil, "", fmt.Errorf("invalid Jira base URL")
+	}
+	rawURL := attachment.Content
+	if c.cfg.Deployment == DeploymentCloud {
+		// Use the configured API origin (the OAuth gateway in remote mode),
+		// not the site URL returned by Jira in the attachment metadata.
+		rawURL = c.cfg.BaseURL + c.apiPath("/attachment/content/"+url.PathEscape(attachment.ID)) + "?redirect=false"
+	}
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil || !sameAttachmentOrigin(base, req.URL) {
+		return nil, "", fmt.Errorf("invalid Jira attachment content URL")
+	}
+	if err := c.authenticate(req); err != nil {
+		return nil, "", err
+	}
+
+	downloadClient := *c.http
+	downloadClient.CheckRedirect = func(next *http.Request, via []*http.Request) error {
+		if len(via) >= 10 || !sameAttachmentOrigin(base, next.URL) {
+			return http.ErrUseLastResponse
+		}
+		return nil
+	}
+	resp, err := downloadClient.Do(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("não foi possível baixar o anexo do Jira")
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", fmt.Errorf("jira retornou HTTP %d ao baixar o anexo", resp.StatusCode)
+	}
+	if resp.ContentLength > limit {
+		return nil, "", ErrAttachmentTooLarge
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return nil, "", fmt.Errorf("lendo o anexo do Jira: %w", err)
+	}
+	if int64(len(data)) > limit {
+		return nil, "", ErrAttachmentTooLarge
+	}
+	return data, resp.Header.Get("Content-Type"), nil
+}
+
+var ErrAttachmentTooLarge = errors.New("anexo excede o limite de download")
+
+func sameAttachmentOrigin(base, target *url.URL) bool {
+	return target.User == nil && target.Scheme == base.Scheme && strings.EqualFold(target.Host, base.Host)
 }
 
 // DownloadAttachmentURL fetches raw bytes from an absolute attachment
 // content URL, e.g. the "content" field returned by ListAttachments.
 func (c *Client) DownloadAttachmentURL(rawURL string) (data []byte, contentType string, err error) {
 	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
-	if err != nil {
-		return nil, "", fmt.Errorf("building download request: %w", err)
-	}
-	if err := c.authenticate(req); err != nil {
-		return nil, "", err
-	}
-	return c.doDownload(req)
-}
-
-func (c *Client) downloadRaw(path string) ([]byte, string, error) {
-	req, err := http.NewRequest(http.MethodGet, c.cfg.BaseURL+path, nil)
 	if err != nil {
 		return nil, "", fmt.Errorf("building download request: %w", err)
 	}
