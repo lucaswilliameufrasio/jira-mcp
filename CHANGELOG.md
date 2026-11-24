@@ -2,7 +2,18 @@
 
 All notable changes to Jira MCP will be documented in this file.
 
+## [1.2.0] - 2026-11-24
+
+### Features
+
+- *(attachments)* Add binary attachment downloads
+
 ## [1.1.0] - 2026-11-11
+
+### Chores
+
+- *(release)* Prepare for v1.1.0
+
 
 ### Features
 
@@ -12,6 +23,10 @@ All notable changes to Jira MCP will be documented in this file.
 ### Other
 
 - Update Go toolchain to 1.27.4
+
+- Merge pull request #22 from lucaswilliameufrasio/release/v1.1.0
+
+Release v1.1.0
 
 ## [1.0.0] - 2026-11-07
 
