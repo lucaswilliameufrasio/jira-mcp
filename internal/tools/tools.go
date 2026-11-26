@@ -4,6 +4,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -19,6 +20,19 @@ import (
 
 // maxInlineAttachmentBytes caps raw bytes before Base64 encoding.
 const maxInlineAttachmentBytes = 15 * 1024 * 1024 // 15 MiB
+
+type textFactory func(*jira.Client) func(json.RawMessage) (string, error)
+
+func textTool(client *jira.Client, factory textFactory) mcp.ContextHandler {
+	return func(ctx context.Context, args json.RawMessage) ([]mcp.ContentBlock, error) {
+		return mcp.TextHandler(factory(client.WithContext(ctx)))(args)
+	}
+}
+func contentTool(client *jira.Client, factory func(*jira.Client) mcp.ToolHandler) mcp.ContextHandler {
+	return func(ctx context.Context, args json.RawMessage) ([]mcp.ContentBlock, error) {
+		return factory(client.WithContext(ctx))(args)
+	}
+}
 
 // Register attaches every Jira tool to the given MCP server.
 func Register(s *mcp.Server, client *jira.Client) {
@@ -41,6 +55,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 					"items":       map[string]interface{}{"type": "string"},
 					"description": "Campos específicos a retornar, ex: [\"summary\",\"status\",\"assignee\"]. Se omitido, usa um conjunto padrão útil.",
 				},
+				"start_at": offsetSchema(),
 				"page_token": map[string]interface{}{
 					"type":        "string",
 					"description": "Token de paginação retornado por uma chamada anterior (apenas Jira Cloud), para buscar a próxima página.",
@@ -48,7 +63,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 			},
 			Required: []string{"jql"},
 		},
-	}, mcp.TextHandler(handleSearch(client)))
+	}, contentTool(client, handleSearch))
 
 	s.RegisterTool(mcp.Tool{
 		Name:        "jira_get_issue",
@@ -68,7 +83,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 			},
 			Required: []string{"issue_key"},
 		},
-	}, mcp.TextHandler(handleGetIssue(client)))
+	}, textTool(client, handleGetIssue))
 
 	s.RegisterTool(mcp.Tool{
 		Name:        "jira_get_field_metadata",
@@ -81,7 +96,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 			},
 			Required: []string{"issue_key"},
 		},
-	}, mcp.TextHandler(handleGetFieldMetadata(client)))
+	}, textTool(client, handleGetFieldMetadata))
 
 	s.RegisterTool(mcp.Tool{
 		Name:        "jira_set_issue_epic",
@@ -94,7 +109,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 			},
 			Required: []string{"issue_key", "epic_key"},
 		},
-	}, mcp.TextHandler(handleSetIssueEpic(client)))
+	}, textTool(client, handleSetIssueEpic))
 
 	s.RegisterTool(mcp.Tool{
 		Name:        "jira_get_issue_hierarchy",
@@ -104,7 +119,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 			Properties: map[string]interface{}{"issue_key": map[string]interface{}{"type": "string", "description": "Chave ou ID da issue."}},
 			Required:   []string{"issue_key"},
 		},
-	}, mcp.TextHandler(handleGetIssueHierarchy(client)))
+	}, textTool(client, handleGetIssueHierarchy))
 
 	s.RegisterTool(mcp.Tool{
 		Name: "jira_link_issue_parent", Description: "Vincula uma issue a um pai, incluindo épico ou iniciativa, sujeito às regras do Jira.",
@@ -112,23 +127,24 @@ func Register(s *mcp.Server, client *jira.Client) {
 			"issue_key":  map[string]interface{}{"type": "string", "description": "Issue filha."},
 			"parent_key": map[string]interface{}{"type": "string", "description": "Issue pai."},
 		}, Required: []string{"issue_key", "parent_key"}},
-	}, mcp.TextHandler(handleLinkIssueParent(client)))
+	}, textTool(client, handleLinkIssueParent))
 	s.RegisterTool(mcp.Tool{
 		Name: "jira_unlink_issue_parent", Description: "Desvincula a issue de seu pai sem excluí-la.",
 		InputSchema: mcp.InputSchema{Type: "object", Properties: map[string]interface{}{"issue_key": map[string]interface{}{"type": "string"}}, Required: []string{"issue_key"}},
-	}, mcp.TextHandler(handleUnlinkIssueParent(client)))
+	}, textTool(client, handleUnlinkIssueParent))
 	s.RegisterTool(mcp.Tool{
 		Name: "jira_delete_issue", Description: "Exclui definitivamente uma issue do Jira. Use somente quando a exclusão for explicitamente solicitada; não exclui subtarefas automaticamente.",
 		InputSchema: mcp.InputSchema{Type: "object", Properties: map[string]interface{}{"issue_key": map[string]interface{}{"type": "string"}, "confirm": map[string]interface{}{"type": "boolean", "description": "Deve ser true após solicitação explícita de exclusão."}}, Required: []string{"issue_key", "confirm"}},
-	}, mcp.TextHandler(handleDeleteIssue(client)))
+	}, textTool(client, handleDeleteIssue))
 	s.RegisterTool(mcp.Tool{
 		Name: "jira_list_issue_children", Description: "Lista issues filhas diretas de um épico, iniciativa ou outra issue pai usando JQL; a disponibilidade depende do Jira.",
 		InputSchema: mcp.InputSchema{Type: "object", Properties: map[string]interface{}{
 			"parent_key":  map[string]interface{}{"type": "string"},
 			"max_results": map[string]interface{}{"type": "integer"},
+			"start_at":    offsetSchema(),
 			"page_token":  map[string]interface{}{"type": "string", "description": "Token de página para Jira Cloud."},
 		}, Required: []string{"parent_key"}},
-	}, mcp.TextHandler(handleListIssueChildren(client)))
+	}, textTool(client, handleListIssueChildren))
 
 	s.RegisterTool(mcp.Tool{
 		Name:        "jira_create_issue",
@@ -159,7 +175,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 			},
 			Required: []string{"project_key", "issue_type", "summary"},
 		},
-	}, mcp.TextHandler(handleCreateIssue(client)))
+	}, textTool(client, handleCreateIssue))
 
 	s.RegisterTool(mcp.Tool{
 		Name:        "jira_update_issue",
@@ -182,7 +198,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 			},
 			Required: []string{"issue_key"},
 		},
-	}, mcp.TextHandler(handleUpdateIssue(client)))
+	}, textTool(client, handleUpdateIssue))
 
 	s.RegisterTool(mcp.Tool{
 		Name:        "jira_add_comment",
@@ -195,7 +211,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 			},
 			Required: []string{"issue_key", "comment"},
 		},
-	}, mcp.TextHandler(handleAddComment(client)))
+	}, textTool(client, handleAddComment))
 
 	s.RegisterTool(mcp.Tool{
 		Name:        "jira_get_comment",
@@ -208,7 +224,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 			},
 			Required: []string{"issue_key", "comment_id"},
 		},
-	}, mcp.TextHandler(handleGetComment(client)))
+	}, textTool(client, handleGetComment))
 
 	s.RegisterTool(mcp.Tool{
 		Name:        "jira_list_comments",
@@ -223,7 +239,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 			},
 			Required: []string{"issue_key"},
 		},
-	}, mcp.TextHandler(handleListComments(client)))
+	}, textTool(client, handleListComments))
 
 	s.RegisterTool(mcp.Tool{
 		Name:        "jira_update_comment",
@@ -237,7 +253,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 			},
 			Required: []string{"issue_key", "comment_id", "comment"},
 		},
-	}, mcp.TextHandler(handleUpdateComment(client)))
+	}, textTool(client, handleUpdateComment))
 
 	s.RegisterTool(mcp.Tool{
 		Name:        "jira_list_transitions",
@@ -249,7 +265,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 			},
 			Required: []string{"issue_key"},
 		},
-	}, mcp.TextHandler(handleListTransitions(client)))
+	}, textTool(client, handleListTransitions))
 
 	s.RegisterTool(mcp.Tool{
 		Name:        "jira_transition_issue",
@@ -273,7 +289,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 			},
 			Required: []string{"issue_key"},
 		},
-	}, mcp.TextHandler(handleTransitionIssue(client)))
+	}, textTool(client, handleTransitionIssue))
 
 	// --- Issue links ---
 
@@ -281,7 +297,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 		Name:        "jira_list_issue_link_types",
 		Description: "Lista os tipos formais de links disponíveis no Jira, incluindo as descrições inward e outward (por exemplo, Relates/relates to e Blocks/blocks/blocked by).",
 		InputSchema: mcp.InputSchema{Type: "object", Properties: map[string]interface{}{}},
-	}, mcp.TextHandler(handleListIssueLinkTypes(client)))
+	}, textTool(client, handleListIssueLinkTypes))
 
 	s.RegisterTool(mcp.Tool{
 		Name:        "jira_list_issue_links",
@@ -291,7 +307,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 			Properties: map[string]interface{}{"issue_key": map[string]interface{}{"type": "string", "description": "Chave ou ID da issue."}},
 			Required:   []string{"issue_key"},
 		},
-	}, mcp.TextHandler(handleListIssueLinks(client)))
+	}, textTool(client, handleListIssueLinks))
 
 	s.RegisterTool(mcp.Tool{
 		Name:        "jira_create_issue_link",
@@ -306,7 +322,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 			},
 			Required: []string{"link_type", "inward_issue", "outward_issue"},
 		},
-	}, mcp.TextHandler(handleCreateIssueLink(client)))
+	}, textTool(client, handleCreateIssueLink))
 
 	s.RegisterTool(mcp.Tool{
 		Name:        "jira_update_issue_link",
@@ -322,7 +338,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 			},
 			Required: []string{"link_id"},
 		},
-	}, mcp.TextHandler(handleUpdateIssueLink(client)))
+	}, textTool(client, handleUpdateIssueLink))
 
 	s.RegisterTool(mcp.Tool{
 		Name:        "jira_delete_issue_link",
@@ -332,7 +348,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 			Properties: map[string]interface{}{"link_id": map[string]interface{}{"type": "string", "description": "ID do link."}},
 			Required:   []string{"link_id"},
 		},
-	}, mcp.TextHandler(handleDeleteIssueLink(client)))
+	}, textTool(client, handleDeleteIssueLink))
 
 	s.RegisterTool(mcp.Tool{
 		Name:        "jira_list_projects",
@@ -341,7 +357,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 			Type:       "object",
 			Properties: map[string]interface{}{},
 		},
-	}, mcp.TextHandler(handleListProjects(client)))
+	}, textTool(client, handleListProjects))
 
 	s.RegisterTool(mcp.Tool{
 		Name:        "jira_assign_issue",
@@ -357,7 +373,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 			},
 			Required: []string{"issue_key", "assignee"},
 		},
-	}, mcp.TextHandler(handleAssignIssue(client)))
+	}, textTool(client, handleAssignIssue))
 
 	s.RegisterTool(mcp.Tool{
 		Name:        "jira_search_users",
@@ -370,7 +386,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 				"max_results": map[string]interface{}{"type": "integer", "description": "Máximo de usuários (padrão 20, máximo 100)."},
 			},
 		},
-	}, mcp.TextHandler(handleSearchUsers(client)))
+	}, textTool(client, handleSearchUsers))
 
 	// --- Agile: boards & sprints ---
 
@@ -390,7 +406,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 				},
 			},
 		},
-	}, mcp.TextHandler(handleListBoards(client)))
+	}, textTool(client, handleListBoards))
 
 	s.RegisterTool(mcp.Tool{
 		Name:        "jira_get_board",
@@ -402,7 +418,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 			},
 			Required: []string{"board_id"},
 		},
-	}, mcp.TextHandler(handleGetBoard(client)))
+	}, textTool(client, handleGetBoard))
 
 	s.RegisterTool(mcp.Tool{
 		Name:        "jira_get_issue_rank",
@@ -415,7 +431,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 			},
 			Required: []string{"board_id", "issue_key"},
 		},
-	}, mcp.TextHandler(handleGetIssueRank(client)))
+	}, textTool(client, handleGetIssueRank))
 
 	s.RegisterTool(mcp.Tool{
 		Name:        "jira_update_issue_rank",
@@ -429,7 +445,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 			},
 			Required: []string{"issue_key"},
 		},
-	}, mcp.TextHandler(handleUpdateIssueRank(client)))
+	}, textTool(client, handleUpdateIssueRank))
 
 	s.RegisterTool(mcp.Tool{
 		Name:        "jira_list_sprints",
@@ -445,7 +461,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 			},
 			Required: []string{"board_id"},
 		},
-	}, mcp.TextHandler(handleListSprints(client)))
+	}, textTool(client, handleListSprints))
 
 	s.RegisterTool(mcp.Tool{
 		Name:        "jira_board_issues",
@@ -455,11 +471,12 @@ func Register(s *mcp.Server, client *jira.Client) {
 			Properties: map[string]interface{}{
 				"board_id":    map[string]interface{}{"type": "integer", "description": "ID numérico do board."},
 				"jql":         map[string]interface{}{"type": "string", "description": "Filtro JQL adicional, opcional."},
+				"start_at":    offsetSchema(),
 				"max_results": map[string]interface{}{"type": "integer", "description": "Número máximo de issues (padrão 50)."},
 			},
 			Required: []string{"board_id"},
 		},
-	}, mcp.TextHandler(handleBoardIssues(client)))
+	}, textTool(client, handleBoardIssues))
 
 	s.RegisterTool(mcp.Tool{
 		Name:        "jira_sprint_issues",
@@ -469,11 +486,12 @@ func Register(s *mcp.Server, client *jira.Client) {
 			Properties: map[string]interface{}{
 				"sprint_id":   map[string]interface{}{"type": "integer", "description": "ID numérico da sprint."},
 				"jql":         map[string]interface{}{"type": "string", "description": "Filtro JQL adicional, opcional."},
+				"start_at":    offsetSchema(),
 				"max_results": map[string]interface{}{"type": "integer", "description": "Número máximo de issues (padrão 50)."},
 			},
 			Required: []string{"sprint_id"},
 		},
-	}, mcp.TextHandler(handleSprintIssues(client)))
+	}, textTool(client, handleSprintIssues))
 
 	// --- Attachments (imagens, vídeos e outros arquivos) ---
 
@@ -487,7 +505,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 			},
 			Required: []string{"issue_key"},
 		},
-	}, mcp.TextHandler(handleListAttachments(client)))
+	}, textTool(client, handleListAttachments))
 
 	s.RegisterTool(mcp.Tool{
 		Name:        "jira_get_attachment",
@@ -507,7 +525,7 @@ func Register(s *mcp.Server, client *jira.Client) {
 			},
 			Required: []string{"issue_key"},
 		},
-	}, handleGetAttachment(client))
+	}, contentTool(client, handleGetAttachment))
 
 	s.RegisterTool(mcp.Tool{
 		Name: "jira_download_attachment",
@@ -522,7 +540,8 @@ func Register(s *mcp.Server, client *jira.Client) {
 			},
 			Required: []string{"issue_key"},
 		},
-	}, handleDownloadAttachment(client))
+	}, contentTool(client, handleDownloadAttachment))
+	registerPlanning(s, client)
 }
 
 func AvailableToolNames() []string {
@@ -533,7 +552,7 @@ func AvailableToolNames() []string {
 		"jira_update_issue_link", "jira_delete_issue_link",
 		"jira_list_projects", "jira_assign_issue", "jira_search_users", "jira_list_boards", "jira_get_board", "jira_get_issue_rank", "jira_update_issue_rank",
 		"jira_list_sprints", "jira_board_issues", "jira_sprint_issues",
-		"jira_list_attachments", "jira_get_attachment", "jira_download_attachment",
+		"jira_list_attachments", "jira_get_attachment", "jira_download_attachment", "jira_upload_attachment", "jira_move_issue", "jira_get_issue_changelog",
 	}
 }
 
@@ -543,6 +562,7 @@ type searchArgs struct {
 	JQL        string   `json:"jql"`
 	MaxResults int      `json:"max_results"`
 	Fields     []string `json:"fields"`
+	StartAt    int      `json:"start_at"`
 	PageToken  string   `json:"page_token"`
 }
 
@@ -643,6 +663,7 @@ func handleListIssueChildren(client *jira.Client) func(json.RawMessage) (string,
 		var args struct {
 			ParentKey  string `json:"parent_key"`
 			MaxResults int    `json:"max_results"`
+			StartAt    int    `json:"start_at"`
 			PageToken  string `json:"page_token"`
 		}
 		if err := unmarshal(raw, &args); err != nil {
@@ -651,7 +672,7 @@ func handleListIssueChildren(client *jira.Client) func(json.RawMessage) (string,
 		if strings.TrimSpace(args.ParentKey) == "" {
 			return "", fmt.Errorf("o parâmetro 'parent_key' é obrigatório")
 		}
-		result, err := client.SearchIssues("parent = "+strconv.Quote(args.ParentKey), args.MaxResults, []string{"*all"}, args.PageToken)
+		result, err := client.SearchIssues("parent = "+strconv.Quote(args.ParentKey), args.MaxResults, []string{"*all"}, args.PageToken, args.StartAt)
 		if err != nil {
 			return "", friendlyError(err)
 		}
@@ -707,24 +728,32 @@ func handleDeleteIssue(client *jira.Client) func(json.RawMessage) (string, error
 	}
 }
 
-func handleSearch(client *jira.Client) func(json.RawMessage) (string, error) {
-	return func(raw json.RawMessage) (string, error) {
+func handleSearch(client *jira.Client) mcp.ToolHandler {
+	return func(raw json.RawMessage) ([]mcp.ContentBlock, error) {
 		var args searchArgs
 		if err := unmarshal(raw, &args); err != nil {
-			return "", err
+			return nil, err
 		}
 		if strings.TrimSpace(args.JQL) == "" {
-			return "", fmt.Errorf("o parâmetro 'jql' é obrigatório")
+			return nil, fmt.Errorf("o parâmetro 'jql' é obrigatório")
 		}
 		fields := args.Fields
 		if len(fields) == 0 {
-			fields = []string{"*all"}
+			fields = defaultIssueFields
 		}
-		result, err := client.SearchIssues(args.JQL, args.MaxResults, fields, args.PageToken)
+		result, err := client.SearchIssues(args.JQL, args.MaxResults, fields, args.PageToken, args.StartAt)
 		if err != nil {
-			return "", friendlyError(err)
+			return nil, friendlyError(err)
 		}
-		return formatSearchResult(result), nil
+		page := struct {
+			*jira.SearchResult
+			NextStartAt *int `json:"next_start_at,omitempty"`
+		}{SearchResult: result}
+		next := result.StartAt + len(result.Issues)
+		if len(result.Issues) > 0 && next < result.Total {
+			page.NextStartAt = &next
+		}
+		return []mcp.ContentBlock{{Type: "text", Text: formatSearchResult(result, args.Fields...), Structured: page}}, nil
 	}
 }
 
@@ -1077,8 +1106,11 @@ func handleListIssueLinks(client *jira.Client) func(json.RawMessage) (string, er
 		var sb strings.Builder
 		fmt.Fprintf(&sb, "Links de %s:\n", args.IssueKey)
 		for _, link := range links {
-			fmt.Fprintf(&sb, "- id=%s  tipo=%q  inward=%s (%s)  outward=%s (%s)\n",
-				link.ID, link.Type.Name, link.InwardIssue.Key, link.Type.Inward, link.OutwardIssue.Key, link.Type.Outward)
+			label, other := link.Type.Outward, link.OutwardIssue.Key
+			if other == "" {
+				label, other = link.Type.Inward, link.InwardIssue.Key
+			}
+			fmt.Fprintf(&sb, "- id=%s  tipo=%q  %s %s %s\n", link.ID, link.Type.Name, args.IssueKey, label, other)
 		}
 		return sb.String(), nil
 	}
@@ -1341,12 +1373,14 @@ type listSprintsArgs struct {
 }
 
 type boardIssuesArgs struct {
+	StartAt    int    `json:"start_at"`
 	BoardID    int    `json:"board_id"`
 	JQL        string `json:"jql"`
 	MaxResults int    `json:"max_results"`
 }
 
 type sprintIssuesArgs struct {
+	StartAt    int    `json:"start_at"`
 	SprintID   int    `json:"sprint_id"`
 	JQL        string `json:"jql"`
 	MaxResults int    `json:"max_results"`
@@ -1472,7 +1506,7 @@ func handleBoardIssues(client *jira.Client) func(json.RawMessage) (string, error
 		if args.BoardID == 0 {
 			return "", fmt.Errorf("o parâmetro 'board_id' é obrigatório")
 		}
-		result, err := client.BoardIssues(args.BoardID, args.JQL, args.MaxResults, defaultIssueFields)
+		result, err := client.BoardIssues(args.BoardID, args.JQL, args.MaxResults, defaultIssueFields, args.StartAt)
 		if err != nil {
 			return "", friendlyError(err)
 		}
@@ -1489,7 +1523,7 @@ func handleSprintIssues(client *jira.Client) func(json.RawMessage) (string, erro
 		if args.SprintID == 0 {
 			return "", fmt.Errorf("o parâmetro 'sprint_id' é obrigatório")
 		}
-		result, err := client.SprintIssues(args.SprintID, args.JQL, args.MaxResults, defaultIssueFields)
+		result, err := client.SprintIssues(args.SprintID, args.JQL, args.MaxResults, defaultIssueFields, args.StartAt)
 		if err != nil {
 			return "", friendlyError(err)
 		}
@@ -1699,7 +1733,7 @@ func unmarshal(raw json.RawMessage, v interface{}) error {
 
 func friendlyError(err error) error {
 	if apiErr, ok := err.(*jira.APIError); ok {
-		return fmt.Errorf("jira retornou HTTP %d: %s", apiErr.StatusCode, compact(apiErr.Body))
+		return &jira.APIError{StatusCode: apiErr.StatusCode, Body: compact(apiErr.Body), RetryAfter: apiErr.RetryAfter}
 	}
 	return err
 }
@@ -1890,13 +1924,21 @@ func extractPlainText(v interface{}) string {
 	}
 }
 
-func formatSearchResult(result *jira.SearchResult) string {
+func offsetSchema() map[string]any {
+	return map[string]any{"type": "integer", "minimum": 0, "description": "Índice inicial da página (padrão 0)."}
+}
+func formatSearchResult(result *jira.SearchResult, requested ...string) string {
 	var sb strings.Builder
 	if len(result.Issues) == 0 {
 		return "Nenhuma issue encontrada para essa consulta JQL."
 	}
 	fmt.Fprintf(&sb, "%d issue(s) encontrada(s):\n", len(result.Issues))
 	for _, issue := range result.Issues {
+		if len(requested) > 0 {
+			fields, _ := json.Marshal(issue.Fields)
+			fmt.Fprintf(&sb, "- %s %s\n", issue.Key, fields)
+			continue
+		}
 		summary := fieldString(issue.Fields, "summary")
 		status := fieldString(issue.Fields, "status")
 		assignee := fieldString(issue.Fields, "assignee")
@@ -1907,8 +1949,8 @@ func formatSearchResult(result *jira.SearchResult) string {
 	}
 	if result.NextPageToken != "" {
 		fmt.Fprintf(&sb, "\nHá mais resultados. Use page_token=%q para buscar a próxima página.\n", result.NextPageToken)
-	} else if result.Total > 0 && len(result.Issues) < result.Total {
-		fmt.Fprintf(&sb, "\nMostrando %d de %d resultados totais. Aumente max_results ou refine a consulta JQL para ver mais.\n", len(result.Issues), result.Total)
+	} else if result.StartAt+len(result.Issues) < result.Total {
+		fmt.Fprintf(&sb, "\nUse start_at=%d para a próxima página (%d resultados totais).\n", result.StartAt+len(result.Issues), result.Total)
 	}
 	return sb.String()
 }

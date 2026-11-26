@@ -75,7 +75,7 @@ func TestSearchIssuesCloudUsesEnhancedEndpointAndBasicAuth(t *testing.T) {
 	}))
 	defer server.Close()
 
-	result, err := NewClient(Config{BaseURL: server.URL, Deployment: DeploymentCloud, Email: "user@example.com", APIToken: "secret"}).SearchIssues("project = TEST", 10, nil, "next")
+	result, err := NewClient(Config{BaseURL: server.URL, Deployment: DeploymentCloud, Email: "user@example.com", APIToken: "secret"}).SearchIssues("project = TEST", 10, nil, "next", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestOAuthBearerTakesPrecedenceOverCloudBasicAuth(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(SearchResult{})
 	}))
 	defer server.Close()
-	_, err := NewClient(Config{BaseURL: server.URL, Deployment: DeploymentCloud, Email: "user@example.com", APIToken: "secret", BearerToken: "oauth-token"}).SearchIssues("project = TEST", 1, nil, "")
+	_, err := NewClient(Config{BaseURL: server.URL, Deployment: DeploymentCloud, Email: "user@example.com", APIToken: "secret", BearerToken: "oauth-token"}).SearchIssues("project = TEST", 1, nil, "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestAPIErrorPreservesStatusAndBody(t *testing.T) {
 		http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
 	}))
 	defer server.Close()
-	_, err := NewClient(Config{BaseURL: server.URL, Deployment: DeploymentCloud, BearerToken: "token"}).SearchIssues("bad", 1, nil, "")
+	_, err := NewClient(Config{BaseURL: server.URL, Deployment: DeploymentCloud, BearerToken: "token"}).SearchIssues("bad", 1, nil, "", 0)
 	apiErr, ok := err.(*APIError)
 	if !ok || apiErr.StatusCode != http.StatusBadRequest || apiErr.Body == "" {
 		t.Fatalf("error = %#v", err)

@@ -13,7 +13,7 @@ func TestPageSummarizesEventsAndEscapesContent(t *testing.T) {
 	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
 	events := []mcp.ToolEvent{
 		{Tool: "<script>alert(1)</script>", StartedAt: now, Duration: 100 * time.Millisecond, Success: true},
-		{Tool: "jira_search", StartedAt: now, Duration: 300 * time.Millisecond, Success: false},
+		{Tool: "jira_search", StartedAt: now.Add(-time.Hour), Duration: 300 * time.Millisecond, Success: false, Category: "permissão"},
 	}
 	page := NewPage("audit", "<account>", "site", "csrf", events, false, now)
 	if page.Count != 2 || page.Failures != 1 || page.Average != "200ms" {
@@ -22,6 +22,9 @@ func TestPageSummarizesEventsAndEscapesContent(t *testing.T) {
 	var out bytes.Buffer
 	if err := Render(&out, page); err != nil {
 		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Falha: permissão") || !strings.Contains(out.String(), "05/11/2026 11:00:00 UTC — 05/11/2026 12:00:00 UTC") {
+		t.Fatal("missing category or sample period")
 	}
 	if strings.Contains(out.String(), "<script>alert") || !strings.Contains(out.String(), "&lt;script&gt;") || !strings.Contains(out.String(), "&lt;account&gt;") {
 		t.Fatal("page did not escape untrusted values")

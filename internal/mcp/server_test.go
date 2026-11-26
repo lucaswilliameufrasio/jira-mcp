@@ -3,15 +3,26 @@ package mcp
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+	"jira-mcp/internal/jira"
 )
 
 func TestTextHandlerReturnsTextContent(t *testing.T) {
 	content, err := TextHandler(func(arguments json.RawMessage) (string, error) { return string(arguments), nil })(json.RawMessage(`{"ok":true}`))
 	if err != nil || len(content) != 1 || content[0].Type != "text" {
 		t.Fatalf("content = %#v, err = %v", content, err)
+	}
+}
+
+func TestFailureCategoryDoesNotIncludeErrorBody(t *testing.T) {
+	for code, want := range map[int]string{401: "permissão", 403: "permissão", 429: "limite de requisições", 503: "Jira indisponível", 400: "outra"} {
+		err := fmt.Errorf("operation: %w", &jira.APIError{StatusCode: code, Body: "issue content"})
+		if got := failureCategory(err); got != want {
+			t.Fatalf("HTTP %d: %q, want %q", code, got, want)
+		}
 	}
 }
 

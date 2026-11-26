@@ -19,6 +19,7 @@ var stylesheet string
 var pageTemplate = template.Must(template.New("console").Parse(markup))
 
 type Event struct {
+	Category string
 	Tool     string
 	Time     string
 	Duration string
@@ -32,6 +33,7 @@ type Page struct {
 	Site        string
 	CSRF        string
 	Local       bool
+	Period      string
 	GeneratedAt string
 	Unavailable bool
 	Count       int
@@ -54,15 +56,23 @@ func NewPage(section, account, site, csrf string, events []mcp.ToolEvent, unavai
 		page.Title = "Visão geral"
 	}
 	var total time.Duration
+	var first, last time.Time
 	for _, event := range events {
+		if first.IsZero() || event.StartedAt.Before(first) {
+			first = event.StartedAt
+		}
+		if event.StartedAt.After(last) {
+			last = event.StartedAt
+		}
 		page.Count++
 		if !event.Success {
 			page.Failures++
 		}
 		total += event.Duration
-		page.Events = append(page.Events, Event{Tool: event.Tool, Time: event.StartedAt.UTC().Format("02/01/2006 15:04:05 UTC"), Duration: event.Duration.Round(time.Millisecond).String(), Success: event.Success})
+		page.Events = append(page.Events, Event{Category: event.Category, Tool: event.Tool, Time: event.StartedAt.UTC().Format("02/01/2006 15:04:05 UTC"), Duration: event.Duration.Round(time.Millisecond).String(), Success: event.Success})
 	}
 	if page.Count > 0 {
+		page.Period = first.UTC().Format("02/01/2006 15:04:05 UTC") + " — " + last.UTC().Format("02/01/2006 15:04:05 UTC")
 		page.Average = (total / time.Duration(page.Count)).Round(time.Millisecond).String()
 	}
 	return page

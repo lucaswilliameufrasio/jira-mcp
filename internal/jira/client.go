@@ -8,6 +8,7 @@ package jira
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -60,6 +61,7 @@ func (c Config) apiVersion() string {
 
 // Client is a thin, synchronous wrapper around net/http for the Jira REST API.
 type Client struct {
+	ctx  context.Context
 	cfg  Config
 	http *http.Client
 }
@@ -70,22 +72,36 @@ func NewClient(cfg Config) *Client {
 		cfg.Deployment = DeploymentCloud
 	}
 	return &Client{
+		ctx:  context.Background(),
 		cfg:  cfg,
 		http: &http.Client{Timeout: 30 * time.Second},
 	}
+}
+
+// WithContext returns a request-local copy sharing the HTTP connection pool.
+func (c Client) WithContext(ctx context.Context) *Client {
+	c.ctx = ctx
+	return &c
 }
 
 // APIError represents a non-2xx response from Jira, with the response body
 // (which Jira usually populates with errorMessages/errors) preserved so the
 // caller can relay something actionable back to the model.
 type APIError struct {
+	RetryAfter string
 	StatusCode int
 	Body       string
 }
 
 func (e *APIError) Error() string {
-	return fmt.Sprintf("jira API error (HTTP %d): %s", e.StatusCode, e.Body)
+	hint := ""
+	if e.StatusCode == 429 && e.RetryAfter != "" {
+		hint = " (Retry-After: " + e.RetryAfter + ")"
+	}
+	return fmt.Sprintf("jira retornou HTTP %d%s: %s", e.StatusCode, hint, e.Body)
 }
+
+func (e *APIError) HTTPStatus() int { return e.StatusCode }
 
 // doJSON issues an HTTP request with an optional JSON body and decodes a
 // JSON response into out (if out is non-nil and the response has a body).
@@ -113,7 +129,7 @@ func (c *Client) doJSONStatus(method, path string, query url.Values, body interf
 		reader = bytes.NewReader(b)
 	}
 
-	req, err := http.NewRequest(method, full, reader)
+	req, err := http.NewRequestWithContext(c.ctx, method, full, reader)
 	if err != nil {
 		return 0, fmt.Errorf("building request: %w", err)
 	}
@@ -125,7 +141,7 @@ func (c *Client) doJSONStatus(method, path string, query url.Values, body interf
 		return 0, err
 	}
 
-	resp, err := c.http.Do(req)
+	resp, err := readWithRetry(c.http, req, method == http.MethodGet || path == c.apiPath("/search/jql"))
 	if err != nil {
 		return 0, fmt.Errorf("calling jira: %w", err)
 	}
@@ -137,7 +153,7 @@ func (c *Client) doJSONStatus(method, path string, query url.Values, body interf
 	}
 
 	if resp.StatusCode >= 300 {
-		return resp.StatusCode, &APIError{StatusCode: resp.StatusCode, Body: string(respBody)}
+		return resp.StatusCode, &APIError{StatusCode: resp.StatusCode, RetryAfter: resp.Header.Get("Retry-After"), Body: string(respBody)}
 	}
 
 	if out != nil && len(respBody) > 0 {
@@ -359,13 +375,17 @@ type transitionsResponse struct {
 // endpoint (POST /search/jql) with token-based pagination, since the classic
 // /search endpoint was removed by Atlassian in 2025. On Server/Data Center it
 // uses the still-current classic GET /search endpoint with startAt paging.
-func (c *Client) SearchIssues(jql string, maxResults int, fields []string, pageToken string) (*SearchResult, error) {
+func (c *Client) SearchIssues(jql string, maxResults int, fields []string, pageToken string, startAt int) (*SearchResult, error) {
 	if maxResults <= 0 {
 		maxResults = 25
 	}
 
+	if startAt < 0 || (startAt != 0 && c.cfg.Deployment != DeploymentServer) || (pageToken != "" && c.cfg.Deployment == DeploymentServer) {
+		return nil, fmt.Errorf("use start_at não negativo no Data Center e page_token no Cloud")
+	}
 	if c.cfg.Deployment == DeploymentServer {
 		q := url.Values{}
+		q.Set("startAt", strconv.Itoa(startAt))
 		q.Set("jql", jql)
 		q.Set("maxResults", strconv.Itoa(maxResults))
 		if len(fields) > 0 {
@@ -1283,11 +1303,15 @@ func (c *Client) ListSprints(boardID int, state string, maxResults int) ([]Sprin
 // BoardIssues returns the issues on a board (backlog + active sprint items
 // for Scrum boards, or the column contents for Kanban boards), optionally
 // narrowed with an extra JQL filter.
-func (c *Client) BoardIssues(boardID int, jql string, maxResults int, fields []string) (*SearchResult, error) {
+func (c *Client) BoardIssues(boardID int, jql string, maxResults int, fields []string, startAt int) (*SearchResult, error) {
 	if maxResults <= 0 {
 		maxResults = 50
 	}
+	if startAt < 0 {
+		return nil, fmt.Errorf("start_at deve ser não negativo")
+	}
 	q := url.Values{}
+	q.Set("startAt", strconv.Itoa(startAt))
 	q.Set("maxResults", strconv.Itoa(maxResults))
 	if jql != "" {
 		q.Set("jql", jql)
@@ -1303,11 +1327,15 @@ func (c *Client) BoardIssues(boardID int, jql string, maxResults int, fields []s
 }
 
 // SprintIssues returns the issues in a given sprint.
-func (c *Client) SprintIssues(sprintID int, jql string, maxResults int, fields []string) (*SearchResult, error) {
+func (c *Client) SprintIssues(sprintID int, jql string, maxResults int, fields []string, startAt int) (*SearchResult, error) {
 	if maxResults <= 0 {
 		maxResults = 50
 	}
+	if startAt < 0 {
+		return nil, fmt.Errorf("start_at deve ser não negativo")
+	}
 	q := url.Values{}
+	q.Set("startAt", strconv.Itoa(startAt))
 	q.Set("maxResults", strconv.Itoa(maxResults))
 	if jql != "" {
 		q.Set("jql", jql)
@@ -1372,7 +1400,7 @@ func (c *Client) DownloadAttachment(attachment Attachment, limit int64) ([]byte,
 		// not the site URL returned by Jira in the attachment metadata.
 		rawURL = c.cfg.BaseURL + c.apiPath("/attachment/content/"+url.PathEscape(attachment.ID)) + "?redirect=false"
 	}
-	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	req, err := http.NewRequestWithContext(c.ctx, http.MethodGet, rawURL, nil)
 	if err != nil || !sameAttachmentOrigin(base, req.URL) {
 		return nil, "", fmt.Errorf("invalid Jira attachment content URL")
 	}
@@ -1387,13 +1415,13 @@ func (c *Client) DownloadAttachment(attachment Attachment, limit int64) ([]byte,
 		}
 		return nil
 	}
-	resp, err := downloadClient.Do(req)
+	resp, err := readWithRetry(&downloadClient, req, true)
 	if err != nil {
 		return nil, "", fmt.Errorf("não foi possível baixar o anexo do Jira")
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return nil, "", fmt.Errorf("jira retornou HTTP %d ao baixar o anexo", resp.StatusCode)
+		return nil, "", &APIError{StatusCode: resp.StatusCode, RetryAfter: resp.Header.Get("Retry-After"), Body: "ao baixar o anexo"}
 	}
 	if resp.ContentLength > limit {
 		return nil, "", ErrAttachmentTooLarge
@@ -1417,7 +1445,7 @@ func sameAttachmentOrigin(base, target *url.URL) bool {
 // DownloadAttachmentURL fetches raw bytes from an absolute attachment
 // content URL, e.g. the "content" field returned by ListAttachments.
 func (c *Client) DownloadAttachmentURL(rawURL string) (data []byte, contentType string, err error) {
-	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	req, err := http.NewRequestWithContext(c.ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, "", fmt.Errorf("building download request: %w", err)
 	}
@@ -1428,7 +1456,7 @@ func (c *Client) DownloadAttachmentURL(rawURL string) (data []byte, contentType 
 }
 
 func (c *Client) doDownload(req *http.Request) ([]byte, string, error) {
-	resp, err := c.http.Do(req)
+	resp, err := readWithRetry(c.http, req, true)
 	if err != nil {
 		return nil, "", fmt.Errorf("calling jira: %w", err)
 	}
@@ -1439,7 +1467,7 @@ func (c *Client) doDownload(req *http.Request) ([]byte, string, error) {
 		return nil, "", fmt.Errorf("reading attachment: %w", err)
 	}
 	if resp.StatusCode >= 300 {
-		return nil, "", &APIError{StatusCode: resp.StatusCode, Body: string(data)}
+		return nil, "", &APIError{StatusCode: resp.StatusCode, RetryAfter: resp.Header.Get("Retry-After"), Body: string(data)}
 	}
 	return data, resp.Header.Get("Content-Type"), nil
 }

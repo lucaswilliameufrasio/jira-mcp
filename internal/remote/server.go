@@ -358,7 +358,7 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	params := url.Values{"audience": {"api.atlassian.com"}, "client_id": {s.cfg.AtlassianID}, "scope": {"read:jira-work write:jira-work read:jira-user offline_access"}, "redirect_uri": {strings.TrimRight(s.cfg.PublicURL, "/") + "/oauth/callback"}, "state": {externalState}, "response_type": {"code"}, "prompt": {"consent"}}
+	params := url.Values{"audience": {"api.atlassian.com"}, "client_id": {s.cfg.AtlassianID}, "scope": {"read:jira-work write:jira-work read:jira-user write:sprint:jira-software write:board-scope:jira-software read:issue:jira-software read:board-scope:jira-software read:sprint:jira-software read:issue-details:jira read:jql:jira offline_access"}, "redirect_uri": {strings.TrimRight(s.cfg.PublicURL, "/") + "/oauth/callback"}, "state": {externalState}, "response_type": {"code"}, "prompt": {"consent"}}
 	http.Redirect(w, r, strings.TrimRight(s.cfg.AtlassianAuthURL, "/")+"/authorize?"+params.Encode(), http.StatusFound)
 }
 

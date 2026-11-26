@@ -88,8 +88,9 @@ type CallToolParams struct {
 }
 
 type ContentBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
+	Structured any    `json:"-"`
+	Type       string `json:"type"`
+	Text       string `json:"text,omitempty"`
 
 	// Data holds base64-encoded image bytes when Type == "image".
 	Data     string `json:"data,omitempty"`

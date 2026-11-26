@@ -31,6 +31,12 @@ Landing page e documentação: [docs-site](docs-site/README.md).
 | `jira_update_comment` | Atualiza comentário existente |
 | `jira_list_transitions` | Lista transições de workflow disponíveis |
 | `jira_transition_issue` | Move a issue no workflow (por ID ou nome) |
+| `jira_list_issue_link_types` | Tipos de vínculo configurados, com descrições nas duas direções |
+| `jira_list_issue_links` | Lista relações da issue |
+| `jira_create_issue_link`, `jira_update_issue_link`, `jira_delete_issue_link` | Gerenciam vínculos direcionais |
+| `jira_upload_attachment` | Anexa bytes Base64 (`data`) à issue, com `filename`, até 15 MiB |
+| `jira_move_issue` | Move para `destination: sprint` com `sprint_id` ou `destination: backlog` |
+| `jira_get_issue_changelog` | Histórico paginado com filtro opcional `field` por nome ou ID |
 | `jira_list_projects` | Lista projetos visíveis |
 | `jira_assign_issue` | Atribui, troca ou remove o responsável — aceita nome, e-mail, accountId/username, `me` ou `unassign` |
 | `jira_search_users` | Busca usuários por nome/e-mail e retorna o accountId (ou username); com `issue_key`, só os atribuíveis |
@@ -44,6 +50,10 @@ Landing page e documentação: [docs-site](docs-site/README.md).
 | `jira_list_attachments` | Lista anexos (imagens, vídeos, docs) de uma issue |
 | `jira_get_attachment` | Mostra imagens anexadas inline para a IA analisar |
 | `jira_download_attachment` | Entrega o arquivo original de qualquer tipo (até 15 MiB) |
+
+`jira_search` retorna texto e `structuredContent` com as issues e os campos selecionados. No Cloud, passe `nextPageToken` como `page_token`; no Data Center, passe `next_start_at` como `start_at`. Boards e sprints também aceitam `start_at`.
+
+No modo remoto, habilite no aplicativo Atlassian os escopos `write:sprint:jira-software`, `write:board-scope:jira-software` e `read:issue:jira-software` para mover issues e consultar o destino. Para consultar páginas de boards e sprints, habilite também `read:board-scope:jira-software`, `read:sprint:jira-software`, `read:issue-details:jira` e `read:jql:jira`. Reconecte para conceder os novos escopos.
 
 `jira_get_issue` solicita todos os campos por padrão, incluindo `customfield_*`.
 Para atualizar campos customizados, use `fields` com o nome API do campo ou o mapa
@@ -79,7 +89,7 @@ No Jira Server/Data Center, comentários continuam sendo texto simples; um ADF
 ### Auditoria das tools
 
 Chamadas de tools registram apenas nome da tool, horário, duração e sucesso ou
-falha; argumentos, conteúdo de issues, respostas e erros não são armazenados.
+falha (com categoria quando disponível); argumentos, conteúdo de issues, respostas e erros não são armazenados.
 A retenção padrão é de 30 dias e pode ser alterada com
 `JIRA_MCP_AUDIT_RETENTION`, em duração Go, por exemplo `720h` (mínimo `1s`,
 máximo `8760h`).

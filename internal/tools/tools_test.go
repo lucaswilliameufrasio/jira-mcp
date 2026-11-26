@@ -10,6 +10,21 @@ import (
 	"jira-mcp/internal/jira"
 )
 
+func TestSearchOffsetAndRequestedFields(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("startAt") != "25" {
+			t.Error("missing requested offset")
+		}
+		_, _ = w.Write([]byte(`{"startAt":25,"total":27,"issues":[{"key":"A-26","fields":{"customfield_1":null}}]}`))
+	}))
+	defer server.Close()
+	client := jira.NewClient(jira.Config{BaseURL: server.URL, Deployment: jira.DeploymentServer, PersonalAccessToken: "test"})
+	text, err := handleSearch(client)(json.RawMessage(`{"jql":"project=A","start_at":25,"fields":["customfield_1"]}`))
+	if err != nil || len(text) != 1 || !strings.Contains(text[0].Text, `"customfield_1":null`) || !strings.Contains(text[0].Text, "start_at=26") {
+		t.Fatalf("unexpected result: %v (%v)", text, err)
+	}
+}
+
 func TestRichCommentMentionAndServerRejection(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
